@@ -11,8 +11,10 @@ A container format and runtime for AI developers, native on **macOS** and **Linu
   macOS runs native binaries under Seatbelt.
 
 > [!NOTE]
-> **Status: early development (M0).** Only `aic init` and `aic version` work today.
-> The examples below show the **planned** interface defined in [`spec/format.md`](spec/format.md).
+> **Status: early development.** Working today: `aic init`, `aic version`, the lock-keeping part of
+> `aic build`, and `aic run` on **macOS** for projects without toolchains (it runs the project directory
+> directly; bundles come in M1). See [`examples/`](examples) and `./demo.sh`. Other examples below show
+> the **planned** interface defined in [`spec/format.md`](spec/format.md).
 
 ## Concepts
 
@@ -61,7 +63,8 @@ entrypoint:
 ```
 
 ```sh
-aic lock && aic build
+aic build              # creates or refreshes aic.lock when aic.yaml changes
+aic build --locked     # in CI: fail instead if aic.lock is missing or stale
 
 # No --config means deny-all: no network, nothing writable outside scratch.
 aic run --workspace ./data report
@@ -220,8 +223,8 @@ aic init myproject      # writes myproject/aic.yaml
 |---|---|
 | M0 | Spec + skeleton ✅ |
 | M1 | Content-addressed store, `build` / `inspect` / `gc` |
-| M2 | macOS Seatbelt sandbox, `run` / `shell` |
+| M2 | macOS Seatbelt sandbox: `run` ✅ (project dirs, deny-all + writable grants), `shell`, limits |
 | M3 | Linux namespace sandbox, `run` / `shell` |
-| M4 | Toolchains: `python`, `node`, `prebuilt` + external provider protocol, `lock` |
+| M4 | Toolchains: `python`, `node`, `prebuilt` + external provider protocol, resolved into `aic.lock` |
 | M5 | Egress allowlist proxy |
 | M6 | `push` / `pull`, signing |

@@ -1,0 +1,7 @@
+#!/bin/sh
+# Prints what the sandboxed process sees.
+echo "$GREETING"
+echo "  working dir: $PWD"
+echo "  HOME:        $HOME"
+echo "  PATH:        $PATH"
+echo "  files:       $(ls "$AIC_ROOT/app/src" | tr '\n' ' ')"

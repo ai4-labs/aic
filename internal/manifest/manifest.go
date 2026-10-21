@@ -239,7 +239,12 @@ var envKeyRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // reservedEnv are variables the runtime owns; bundles cannot set them.
 var reservedEnv = map[string]bool{"PATH": true, "HOME": true, "TMPDIR": true}
 
-func checkEnv(k, v string) error {
+func checkEnv(k, v string) error { return CheckEnv(k, v) }
+
+// CheckEnv validates an environment variable set by a bundle or project:
+// the name must be a valid identifier and must not be reserved for the
+// runtime (PATH, HOME, TMPDIR, AIC_*), and the value must not contain NUL.
+func CheckEnv(k, v string) error {
 	switch {
 	case !envKeyRE.MatchString(k):
 		return fmt.Errorf("invalid env name %q", k)
@@ -249,6 +254,13 @@ func checkEnv(k, v string) error {
 		return fmt.Errorf("env %s contains NUL", k)
 	}
 	return nil
+}
+
+// ValidRelPath reports whether p is a relative, slash-separated path of
+// [A-Za-z0-9._-] segments with no "." or ".." segments, i.e. a path that
+// cannot escape the directory it is resolved against.
+func ValidRelPath(p string) bool {
+	return mountRE.MatchString(p) && !hasDotSegment(p)
 }
 
 func sortedKeys(m map[string]string) []string {

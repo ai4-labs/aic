@@ -1,0 +1,17 @@
+schemaVersion: 1
+name: "hello"
+version: "0.1.0"
+
+targets:
+  - darwin-arm64
+  - darwin-amd64
+  - linux-amd64
+  - linux-arm64
+
+include:
+  - "src/**"
+
+entrypoint:
+  cmd: [./src/hello]
+  env:
+    GREETING: "Hello from aic!"

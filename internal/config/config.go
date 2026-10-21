@@ -105,16 +105,36 @@ func validateEgress(e string) error {
 	return nil
 }
 
-func validateWritable(w string) error {
-	if !strings.HasPrefix(w, "$WORKSPACE") && !strings.HasPrefix(w, "$SCRATCH") {
-		return fmt.Errorf("config: writable %q: must start with $WORKSPACE or $SCRATCH", w)
-	}
-	for _, seg := range strings.Split(w, "/") {
-		if seg == ".." {
-			return fmt.Errorf("config: writable %q: must not contain '..'", w)
+// Writable path base variables.
+const (
+	VarWorkspace = "$WORKSPACE"
+	VarScratch   = "$SCRATCH"
+)
+
+// SplitWritable splits a writable entry into its base variable
+// ($WORKSPACE or $SCRATCH) and a slash-separated relative path ("" for the
+// base itself). It rejects anything else, including look-alike variables
+// such as "$WORKSPACE_X" and any "", "." or ".." segments.
+func SplitWritable(w string) (base, rel string, err error) {
+	for _, v := range []string{VarWorkspace, VarScratch} {
+		if w == v {
+			return v, "", nil
+		}
+		if rest, ok := strings.CutPrefix(w, v+"/"); ok {
+			for _, seg := range strings.Split(rest, "/") {
+				if seg == "" || seg == "." || seg == ".." || strings.ContainsAny(seg, "\\\x00") {
+					return "", "", fmt.Errorf("config: writable %q: invalid path segment %q", w, seg)
+				}
+			}
+			return v, rest, nil
 		}
 	}
-	return nil
+	return "", "", fmt.Errorf("config: writable %q: must be $WORKSPACE or $SCRATCH, optionally followed by /path", w)
+}
+
+func validateWritable(w string) error {
+	_, _, err := SplitWritable(w)
+	return err
 }
 
 var sizeUnits = []struct {

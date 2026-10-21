@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -12,7 +13,10 @@ import (
 	"runtime/debug"
 	"strings"
 
+	"github.com/rakyll/ai-container/internal/config"
+	"github.com/rakyll/ai-container/internal/lock"
 	"github.com/rakyll/ai-container/internal/manifest"
+	"github.com/rakyll/ai-container/internal/runner"
 	"github.com/rakyll/ai-container/internal/sandbox"
 )
 
@@ -22,22 +26,28 @@ const (
 	exitError          = 1
 	exitUsage          = 2
 	exitNotImplemented = 3
+	// exitRunFailed means aic run could not start the app. Otherwise
+	// aic run exits with the app's own exit code (Docker uses 125 too).
+	exitRunFailed = 125
 )
 
 type command struct {
-	name      string
-	usage     string
-	milestone string // non-empty if not implemented yet
+	name  string
+	usage string
+	// milestone is shown in help for commands that are not fully
+	// implemented yet. If run is nil the command only reports it.
+	milestone string
 	run       func(args []string, stdout, stderr io.Writer) int
 }
 
 func commands() []command {
 	return []command{
 		{name: "init", usage: "init [-name NAME] [dir]   scaffold an aic.yaml", run: runInit},
-		{name: "lock", usage: "lock                      resolve aic.yaml into aic.lock via toolchain providers", milestone: "M4"},
-		{name: "build", usage: "build                     materialize components and produce a bundle", milestone: "M1"},
-		{name: "run", usage: "run [flags] <app> [-- cmd...]\n                                run an app in a sandbox (deny-all if no config)\n" +
-			"                                flags: --config FILE, --workspace DIR", milestone: "M2/M3"},
+		{name: "build", usage: "build [--locked] [dir]    lock if needed, then produce a bundle\n" +
+			"                                --locked: fail instead of updating a missing or stale aic.lock (CI)", milestone: "M1", run: runBuild},
+		{name: "run", usage: "run [flags] [dir] [-- cmd...]\n" +
+			"                                run a project in a sandbox (deny-all if no --config); macOS only for now\n" +
+			"                                flags: --config FILE, --workspace DIR", milestone: "M3 for Linux", run: runRun},
 		{name: "shell", usage: "shell [flags] <app>       interactive shell inside the sandbox (same flags as run)", milestone: "M2/M3"},
 		{name: "inspect", usage: "inspect <ref>             show an app manifest", milestone: "M1"},
 		{name: "push", usage: "push <ref>                upload an app", milestone: "M6"},
@@ -102,6 +112,120 @@ func runVersion(args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintf(stdout, "aic %s\nplatform: %s\nsandbox: %s\nmanifest schema: v%d\n",
 		version(), manifest.HostPlatform(), backend, manifest.SchemaVersion)
 	return exitOK
+}
+
+// projectDir parses an optional single [dir] argument.
+func projectDir(fl *flag.FlagSet) (string, bool) {
+	switch fl.NArg() {
+	case 0:
+		return ".", true
+	case 1:
+		return fl.Arg(0), true
+	}
+	return "", false
+}
+
+func runBuild(args []string, stdout, stderr io.Writer) int {
+	fl := flag.NewFlagSet("build", flag.ContinueOnError)
+	fl.SetOutput(stderr)
+	locked := fl.Bool("locked", false, "fail instead of updating a missing or stale aic.lock")
+	if err := fl.Parse(args); err != nil {
+		return exitUsage
+	}
+	dir, ok := projectDir(fl)
+	if !ok {
+		fmt.Fprintln(stderr, "usage: aic build [--locked] [dir]")
+		return exitUsage
+	}
+	res, err := lock.Ensure(dir, *locked)
+	if err != nil {
+		fmt.Fprintf(stderr, "aic build: %v\n", err)
+		return exitError
+	}
+	if res.Updated {
+		fmt.Fprintf(stderr, "aic build: updated %s (%s)\n", lock.FileName, res.Reason)
+	}
+	fmt.Fprintln(stderr, "aic build: assembling the bundle is not implemented yet (planned for milestone M1)")
+	return exitNotImplemented
+}
+
+// maxConfigSize bounds how much of a --config file is read.
+const maxConfigSize = 1 << 20
+
+func runRun(args []string, stdout, stderr io.Writer) int {
+	// Split "-- cmd..." off first: the flag package would otherwise
+	// consume the "--" and make the override look like a directory.
+	var override []string
+	for i, a := range args {
+		if a == "--" {
+			args, override = args[:i], args[i+1:]
+			if len(override) == 0 {
+				fmt.Fprintln(stderr, "aic run: no command after --")
+				return exitUsage
+			}
+			break
+		}
+	}
+	fl := flag.NewFlagSet("run", flag.ContinueOnError)
+	fl.SetOutput(stderr)
+	configPath := fl.String("config", "", "operator config file (JSON); default: deny all")
+	workspace := fl.String("workspace", "", "host directory to expose at $AIC_ROOT/workspace")
+	if err := fl.Parse(args); err != nil {
+		return exitUsage
+	}
+	dir, ok := projectDir(fl)
+	if !ok {
+		fmt.Fprintln(stderr, "usage: aic run [--config FILE] [--workspace DIR] [dir] [-- cmd...]")
+		return exitUsage
+	}
+
+	cfg := config.DenyAll()
+	if *configPath != "" {
+		var err error
+		if cfg, err = readConfig(*configPath); err != nil {
+			fmt.Fprintf(stderr, "aic run: %v\n", err)
+			return exitRunFailed
+		}
+	}
+
+	code, err := runner.Run(context.Background(), runner.Options{
+		ProjectDir: dir,
+		Config:     cfg,
+		Workspace:  *workspace,
+		Cmd:        override,
+		Stdin:      os.Stdin,
+		Stdout:     stdout,
+		Stderr:     stderr,
+	})
+	switch {
+	case errors.Is(err, sandbox.ErrNotImplemented):
+		fmt.Fprintf(stderr, "aic run: the %s sandbox is not implemented yet (milestone M3)\n", manifest.HostPlatform())
+		return exitNotImplemented
+	case err != nil:
+		fmt.Fprintf(stderr, "aic run: %v\n", err)
+		return exitRunFailed
+	}
+	return code
+}
+
+func readConfig(path string) (config.Config, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return config.Config{}, err
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, maxConfigSize+1))
+	if err != nil {
+		return config.Config{}, err
+	}
+	if len(b) > maxConfigSize {
+		return config.Config{}, fmt.Errorf("%s: larger than %d bytes", path, maxConfigSize)
+	}
+	c, err := config.Parse(b)
+	if err != nil {
+		return config.Config{}, fmt.Errorf("%s: %w", path, err)
+	}
+	return c, nil
 }
 
 var projectNameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
@@ -184,7 +308,7 @@ func sanitizeName(s string) string {
 
 // projectFile is the human-authored project file. Only this exact name is
 // recognized (not aic.yml) so there is never ambiguity about which file wins.
-const projectFile = "aic.yaml"
+const projectFile = lock.ProjectFile
 
 // yamlTemplate is the scaffold written by `aic init`. It is deliberately
 // language-neutral: languages come from toolchain providers, and the

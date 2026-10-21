@@ -50,6 +50,11 @@ func TestValidate(t *testing.T) {
 		{Network: Network{Egress: []string{"host:99999"}}},
 		{Filesystem: Filesystem{Writable: []string{"/etc"}}},
 		{Filesystem: Filesystem{Writable: []string{"$WORKSPACE/../.."}}},
+		{Filesystem: Filesystem{Writable: []string{"$WORKSPACE_EVIL/x"}}},
+		{Filesystem: Filesystem{Writable: []string{"$SCRATCH../x"}}},
+		{Filesystem: Filesystem{Writable: []string{"$WORKSPACE/"}}},
+		{Filesystem: Filesystem{Writable: []string{"$WORKSPACE/a//b"}}},
+		{Filesystem: Filesystem{Writable: []string{"$WORKSPACE/./a"}}},
 		{MaxMemory: -1},
 		{MaxProcs: -1},
 	}

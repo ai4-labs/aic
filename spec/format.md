@@ -152,7 +152,9 @@ how it plugs into the process environment, and the runtime only applies that des
   target). This keeps the resulting environment deterministic.
 
 The runtime builds the process environment in this order:
-1. Runtime variables: `AIC_ROOT`, `HOME`, `TMPDIR`, and a minimal system `PATH`.
+1. Runtime variables: `AIC_ROOT`, `AIC_SCRATCH`, `AIC_WORKSPACE` (only with a workspace),
+   `HOME` and `TMPDIR` (both inside `$AIC_SCRATCH`), and the system `PATH`
+   `/usr/bin:/bin:/usr/sbin:/sbin`.
 2. `PATH` is prefixed with each target component's `path` entries in manifest order,
    then each shared component's.
 3. Component `env`.
@@ -179,28 +181,37 @@ writable paths beyond `$SCRATCH`.
   or a silently dropped restriction.
 - `egress` entries are exact `host:port` pairs. Wildcards are not allowed. Connections go
   through the runtime's egress proxy. An empty list means no network access.
-- `writable` paths MUST start with `$WORKSPACE` or `$SCRATCH` and MUST NOT contain `..`.
+- `writable` entries MUST be exactly `$WORKSPACE` or `$SCRATCH`, optionally followed by
+  `/` and a relative path with no empty, `.` or `..` segments. After symlinks are
+  resolved, a writable path MUST stay inside its base directory.
 - Anything not granted is denied. Backends MUST NOT grant broader access
-  than requested. Where a backend cannot enforce a field (e.g. hard memory
-  limits on macOS), it MUST document the weaker guarantee.
+  than requested. If a backend cannot enforce a field (e.g. hard memory limits
+  on macOS today), it MUST refuse to run rather than ignore the field.
 
 ## 7. Container Filesystem View
 
-`aic run` takes one app bundle and an optional config. At run time, every container sees:
+`aic run` takes one app and an optional config. At run time, every container sees:
 
 | Path (relative to container root) | Contents | Access |
 |---|---|---|
 | `<mount>` for each app component | component tree | read-only |
-| `workspace/` (`$WORKSPACE`) | user-provided host dir, if any | per config |
-| `scratch/` (`$SCRATCH`) | per-instance empty dir | read-write |
+| `workspace/` (`$WORKSPACE`) | user-provided host dir, if any | read-only unless granted |
+| `scratch/` (`$SCRATCH`) | per-instance empty dir, deleted after the run | read-write |
 
-On Linux the container root becomes `/`. On macOS there is no root switch.
-The container root is a host directory, and the runtime sets `AIC_ROOT`,
-`HOME`, and `TMPDIR` to point inside it.
+The entrypoint runs in `entrypoint.workdir` (default `app`). On Linux the container
+root becomes `/`. On macOS there is no root switch: the container root is a host
+directory, and the process runs under a Seatbelt profile that starts from
+`(deny default)`. The profile allows reading the OS files needed to run system
+binaries and the container root, and writing only to granted paths. All network
+access is denied.
+
+**Development mode.** Until bundles exist, `aic run [dir]` runs a project directory
+directly. It copies the files matched by `include` into `app/` (symlinks and special
+files are rejected), and projects that declare toolchains are refused.
 
 ## 8. Project File (`aic.yaml`)
 
-`aic.yaml` is the human-authored input to `aic lock` / `aic build`. It is not an
+`aic.yaml` is the human-authored input to `aic build`. It is not an
 artifact and is never distributed. Only the exact file name `aic.yaml` is recognized.
 
 ```yaml
@@ -245,8 +256,8 @@ the app's platform-independent `code` component, mounted at `app/`.
 ### 8.1 Toolchains
 
 `toolchains` maps a **provider name** to provider-defined options. Providers are
-the only place where language knowledge lives. They run at `aic lock` / `aic build`
-time and output ordinary components (`runtime`, `packages`) that declare their
+the only place where language knowledge lives. They run during `aic build`
+(when locking and when materializing) and output ordinary components (`runtime`, `packages`) that declare their
 `path` and `env` (§5.1). The runtime never calls a provider.
 
 `toolchains` MAY be empty. For example, an app made only of shell scripts or
@@ -285,6 +296,46 @@ one JSON response from stdout:
   identical tree digests. `aic build --verify` checks this.
 - Providers run third-party code on the developer machine. Runtimes SHOULD run
   them sandboxed, with network access limited to the sources named in the lock.
+
+### 8.2 Lock File (`aic.lock`)
+
+`aic.lock` is generated next to `aic.yaml` and SHOULD be committed. It separates
+**resolution** (deciding exact versions, which depends on when you ask) from
+**materialization** (fetching and assembling bytes, which MUST depend only on the lock).
+
+```json
+{
+  "schemaVersion": 1,
+  "inputs": {
+    "aic.yaml": "sha256:3f5cdccf6041a921efb33dfefd7bb8841f67a4cae0bb023e058faef35b15a28d"
+  }
+}
+```
+
+- `inputs` maps every file the lock was computed from (slash-separated, relative
+  to the project directory, MUST NOT escape it) to the digest of its contents.
+  In v1 this is `aic.yaml`. Toolchain providers add their own input files (e.g.
+  `requirements.txt`) and their resolved `lock` objects (§8.1) in a later revision.
+- Encoding is canonical: two-space indented JSON with keys sorted and a trailing
+  newline, so an unchanged lock is byte-identical and diffs stay small.
+- Unknown fields and unsupported `schemaVersion`s MUST be rejected.
+
+A lock is **stale** if any recorded input's digest differs from the file on disk,
+if an input is missing, or if a current input is not recorded.
+
+| Command | Lock missing or stale | Lock up to date |
+|---|---|---|
+| `aic build` | re-resolve, write, report why, then build | build; lock untouched |
+| `aic build --locked` | fail and leave the lock untouched | build; lock untouched |
+
+- There is no separate lock command. To re-resolve everything (e.g. to pick up
+  newer versions allowed by `aic.yaml`), delete `aic.lock` and run `aic build`.
+- `--locked` is intended for CI, where an out-of-date lock should fail the build
+  instead of being silently regenerated.
+- A lock that exists but cannot be parsed (e.g. it contains merge-conflict markers)
+  MUST NOT be overwritten automatically. The user must fix or delete it.
+- Writes MUST be atomic (write a temporary file, then rename) so an interrupted
+  write never leaves a truncated lock.
 
 ## 9. Versioning
 

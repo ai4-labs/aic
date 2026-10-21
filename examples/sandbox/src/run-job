@@ -1,0 +1,7 @@
+#!/bin/sh
+# Runs the agent-written job from the workspace.
+if [ -z "${AIC_WORKSPACE:-}" ] || [ ! -f "$AIC_WORKSPACE/solution.sh" ]; then
+  echo "sandbox: run with --workspace pointing at a folder with solution.sh" >&2
+  exit 2
+fi
+exec /bin/sh "$AIC_WORKSPACE/solution.sh"
