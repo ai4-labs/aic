@@ -11,10 +11,21 @@ A container format and runtime for AI developers, native on **macOS** and **Linu
   macOS runs native binaries under Seatbelt.
 
 > [!NOTE]
-> **Status: early development.** Working today: `aic init`, `aic version`, the lock-keeping part of
-> `aic build`, and `aic run` on **macOS** for projects without toolchains (it runs the project directory
-> directly; bundles come in M1). See [`examples/`](examples) and `./demo.sh`. Other examples below show
-> the **planned** interface defined in [`spec/format.md`](spec/format.md).
+> **Status: early development (macOS preview).**
+>
+> **Works today**
+> - `aic run` on macOS: runs a project folder in a deny-by-default Seatbelt sandbox, with
+>   `--workspace` and `--config` write grants. Try [`examples/`](examples) or `./demo.sh`.
+> - `aic build` keeps `aic.lock` up to date (`--locked` for CI).
+> - `aic init` and `aic version`.
+>
+> **Not yet**
+> - Bundles: `aic build` stops after locking, so `aic run` runs the project folder directly (M1).
+> - Linux sandbox (M3), toolchains such as `python` and `node` (M4), network egress (M5),
+>   and memory/process limits. A project or config that needs these is refused, not run with less.
+>
+> Examples further down that use toolchains or egress show the **planned** interface from
+> [`spec/format.md`](spec/format.md).
 
 ## Concepts
 
