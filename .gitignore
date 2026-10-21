@@ -1,0 +1,4 @@
+/aic
+*.test
+*.out
+.DS_Store
