@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-containerregistry/pkg/crane"
 	"github.com/google/go-containerregistry/pkg/registry"
 )
 
@@ -222,5 +223,54 @@ func TestCLICacheAndPrune(t *testing.T) {
 	}
 	if _, _, stderr := runCLI(t, "build", dir); strings.Contains(stderr, "Using cache") {
 		t.Errorf("build after prune used the cache:\n%s", stderr)
+	}
+}
+
+func TestCLITagging(t *testing.T) {
+	t.Setenv("AIC_STORE", t.TempDir())
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte("FROM scratch\nCOPY Dockerfile /\n"), 0o644)
+
+	if code, _, stderr := runCLI(t, "build", "-t", "app:latest", dir); code != exitUsage || !strings.Contains(stderr, `does not tag images as "latest"`) {
+		t.Errorf("-t app:latest: %d %s", code, stderr)
+	}
+	code, stdout, stderr := runCLI(t, "build", "-t", "app", "-t", "app:1.0", dir)
+	if code != exitOK {
+		t.Fatalf("build: %s", stderr)
+	}
+	digest := strings.TrimSpace(stdout)
+	want := "localhost/app:sha256-" + strings.TrimPrefix(digest, "sha256:")
+	if !strings.Contains(stderr, "Successfully tagged "+want) || strings.Contains(stderr, ":latest") {
+		t.Errorf("tags:\n%s", stderr)
+	}
+	_, stdout, _ = runCLI(t, "images")
+	if strings.Contains(stdout, "latest") || !strings.Contains(stdout, "sha256-") || !strings.Contains(stdout, "1.0") {
+		t.Errorf("images:\n%s", stdout)
+	}
+
+	// The repository name alone finds its only image...
+	srv := httptest.NewServer(registry.New())
+	defer srv.Close()
+	host := strings.TrimPrefix(srv.URL, "http://")
+	if code, _, stderr = runCLI(t, "push", "-q", "app", host+"/team/app"); code != exitOK {
+		t.Fatalf("push: %s", stderr)
+	}
+	// ...and a destination without a tag is tagged by digest, not latest.
+	if _, err := crane.Digest(host + "/team/app:sha256-" + strings.TrimPrefix(digest, "sha256:")); err != nil {
+		t.Errorf("digest tag not in registry: %v", err)
+	}
+	if _, err := crane.Digest(host + "/team/app:latest"); err == nil {
+		t.Error("pushed a latest tag")
+	}
+	if code, _, stderr = runCLI(t, "push", "app", host+"/team/app:latest"); code != exitUsage {
+		t.Errorf("push to :latest: %d %s", code, stderr)
+	}
+
+	// With two images in the repository, a tag is required.
+	os.WriteFile(filepath.Join(dir, "other"), []byte("x"), 0o644)
+	os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte("FROM scratch\nCOPY other /\n"), 0o644)
+	runCLI(t, "build", "-q", "-t", "app", dir)
+	if code, _, stderr = runCLI(t, "push", "app", host+"/team/app"); code != exitError || !strings.Contains(stderr, "several images") {
+		t.Errorf("ambiguous push: %d %s", code, stderr)
 	}
 }

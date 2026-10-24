@@ -152,7 +152,93 @@ func find(descs []v1.Descriptor, ref string) (desc *v1.Descriptor, byName string
 			}
 		}
 	}
+	// A name without a tag also matches the repository's only image.
+	if !HasTag(ref) {
+		return findInRepo(descs, ref)
+	}
 	return nil, "", fmt.Errorf("%s: %w", ref, ErrNotFound)
+}
+
+// findInRepo finds the single image stored under any tag of ref's
+// repository.
+func findInRepo(descs []v1.Descriptor, ref string) (*v1.Descriptor, string, error) {
+	repos := map[string]bool{}
+	for _, parse := range []func(string) (name.Reference, error){
+		func(s string) (name.Reference, error) { return name.ParseReference(s) }, ParseLocal,
+	} {
+		if r, err := parse(ref); err == nil {
+			repos[r.Context().Name()] = true
+		}
+	}
+	var found *v1.Descriptor
+	var names []string
+	ambiguous := false
+	for i, d := range descs {
+		n := d.Annotations[RefAnnotation]
+		r, err := name.ParseReference(n)
+		if n == "" || err != nil || !repos[r.Context().Name()] {
+			continue
+		}
+		names = append(names, n)
+		if found == nil {
+			found = &descs[i]
+		} else if found.Digest != d.Digest {
+			ambiguous = true
+		}
+	}
+	switch {
+	case found == nil:
+		return nil, "", fmt.Errorf("%s: %w", ref, ErrNotFound)
+	case ambiguous:
+		return nil, "", fmt.Errorf("%s has several images; specify one of: %s", ref, strings.Join(names, ", "))
+	}
+	return found, found.Annotations[RefAnnotation], nil
+}
+
+// HasTag reports whether an image name includes a tag or a digest.
+func HasTag(s string) bool {
+	last := s[strings.LastIndex(s, "/")+1:]
+	return strings.ContainsAny(last, ":@")
+}
+
+// DigestTag is the tag aic gives an image built without one:
+// "sha256-" followed by the image digest. aic never uses "latest".
+func DigestTag(repo name.Repository, digest v1.Hash) name.Tag {
+	return repo.Tag(digest.Algorithm + "-" + digest.Hex)
+}
+
+// ErrLatest is returned for names that use the "latest" tag.
+var ErrLatest = errors.New(`aic does not tag images as "latest"; leave the tag out to tag by digest, or use a version`)
+
+// ParseTag parses a name for tagging a local image (unqualified names go
+// under localhost/). If it has no tag, ok is false and the repository is
+// returned for tagging by digest. "latest" is rejected.
+func ParseTag(s string) (tag name.Tag, repo name.Repository, ok bool, err error) {
+	return parseTag(s, ParseLocal)
+}
+
+// ParseDestination is like ParseTag for a registry destination
+// (unqualified names go to Docker Hub).
+func ParseDestination(s string) (tag name.Tag, repo name.Repository, ok bool, err error) {
+	return parseTag(s, func(s string) (name.Reference, error) { return name.ParseReference(s) })
+}
+
+func parseTag(s string, parse func(string) (name.Reference, error)) (tag name.Tag, repo name.Repository, ok bool, err error) {
+	if strings.Contains(s[strings.LastIndex(s, "/")+1:], "@") {
+		return name.Tag{}, name.Repository{}, false, fmt.Errorf("%s: a digest can't be used as a tag", s)
+	}
+	ref, err := parse(s)
+	if err != nil {
+		return name.Tag{}, name.Repository{}, false, err
+	}
+	if !HasTag(s) {
+		return name.Tag{}, ref.Context(), false, nil
+	}
+	t := ref.(name.Tag)
+	if t.TagStr() == "latest" {
+		return name.Tag{}, name.Repository{}, false, fmt.Errorf("%s: %w", s, ErrLatest)
+	}
+	return t, t.Context(), true, nil
 }
 
 func isHex(s string) bool {

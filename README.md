@@ -5,7 +5,7 @@ A podman-like container image builder. `aic` builds OCI images from a
 single binary: no daemon, no podman or Docker, no root.
 
 ```sh
-aic build -t hello examples/hello        # build ./examples/hello/Dockerfile
+aic build -t hello examples/hello        # tagged localhost/hello:sha256-<digest>
 aic push hello registry.example.com/team/hello:1
 aic pull registry.example.com/team/hello:1
 ```
@@ -29,7 +29,7 @@ aic pull registry.example.com/team/hello:1
 
 ```
 aic build [flags] [CONTEXT]      build CONTEXT/Dockerfile (default context: .)
-  -t, --tag NAME                 name the image (repeatable); unqualified names go under localhost/
+  -t, --tag NAME[:TAG]           name the image (repeatable); unqualified names go under localhost/
   -f, --file PATH                Dockerfile path
   --build-arg KEY[=VALUE]        set a build argument (repeatable)
   --target STAGE                 build up to this stage
@@ -48,6 +48,11 @@ aic pull [--platform OS/ARCH] IMAGE
 aic push IMAGE [DESTINATION]     IMAGE may be a name or a digest (prefix)
 aic version
 ```
+
+aic never uses the `latest` tag: a name without a tag (`-t hello`, or a push
+destination like `ghcr.io/org/hello`) is tagged `sha256-<image digest>`, and
+`:latest` is rejected. A name without a tag also refers to a repository's only
+local image, so `aic push hello ghcr.io/org/hello` works after `-t hello`.
 
 Flags may come before or after positional arguments. Shell completion:
 `aic completion bash|zsh|fish|powershell`.

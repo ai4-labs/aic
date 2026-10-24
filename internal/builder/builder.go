@@ -40,6 +40,9 @@ type Options struct {
 	Dockerfile string
 	// Tags name the resulting image in the store.
 	Tags []name.Reference
+	// DigestRepos are repositories to tag the image in by its digest
+	// (see store.DigestTag), for names given without a tag.
+	DigestRepos []name.Repository
 	// BuildArgs override ARG defaults.
 	BuildArgs map[string]string
 	// Target is the stage to build. Default: the last stage.
@@ -184,14 +187,18 @@ func Build(ctx context.Context, opts Options) (v1.Image, error) {
 	if len(unused) > 0 {
 		fmt.Fprintf(opts.Progress, "[Warning] build args not consumed by the Dockerfile: %s\n", strings.Join(unused, ", "))
 	}
-	if err := opts.Store.Put(img, opts.Tags...); err != nil {
-		return nil, fmt.Errorf("storing image: %w", err)
-	}
-	// Return the stored copy: the built image's layers live in tmp.
 	d, err := img.Digest()
 	if err != nil {
 		return nil, err
 	}
+	tags := append([]name.Reference(nil), opts.Tags...)
+	for _, repo := range opts.DigestRepos {
+		tags = append(tags, store.DigestTag(repo, d))
+	}
+	if err := opts.Store.Put(img, tags...); err != nil {
+		return nil, fmt.Errorf("storing image: %w", err)
+	}
+	// Return the stored copy: the built image's layers live in tmp.
 	return opts.Store.Image(d.String())
 }
 

@@ -120,11 +120,14 @@ func (f *File) Username(reg name.Registry) (string, error) {
 // Login saves credentials for reg.
 func (f *File) Login(reg name.Registry, username, password string) error {
 	k := keys(reg)[0]
-	return f.cf.GetCredentialsStore(k).Store(types.AuthConfig{
-		Username:      username,
-		Password:      password,
-		ServerAddress: k,
-	})
+	ac := types.AuthConfig{Username: username, Password: password, ServerAddress: k}
+	if f.cf.CredentialsStore == "" && f.cf.CredentialHelpers[k] == "" {
+		// Written directly: Docker's file store prints a Docker-specific
+		// warning to stderr; aic login prints its own note.
+		f.cf.AuthConfigs[k] = ac
+		return f.cf.Save()
+	}
+	return f.cf.GetCredentialsStore(k).Store(ac)
 }
 
 // Logout removes the credentials for reg. It reports whether there were

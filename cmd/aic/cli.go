@@ -196,7 +196,7 @@ isolate a step.`,
 		},
 	}
 	f := cmd.Flags()
-	f.StringArrayVarP(&o.tags, "tag", "t", nil, "name and optionally tag the image (repeatable); unqualified names go under localhost/")
+	f.StringArrayVarP(&o.tags, "tag", "t", nil, "name the image (repeatable); without a tag it is tagged sha256-<digest>; unqualified names go under localhost/")
 	f.StringVarP(&o.file, "file", "f", "", "path to the Dockerfile (default CONTEXT/Dockerfile)")
 	f.StringArrayVar(&o.buildArgs, "build-arg", nil, "set a build argument `KEY=VALUE`, or KEY to take it from the environment (repeatable)")
 	f.StringVar(&o.target, "target", "", "build up to this `stage`")
@@ -225,12 +225,17 @@ func runBuild(cmd *cobra.Command, contextDir string, o buildOptions) error {
 	}
 
 	var refs []name.Reference
+	var digestRepos []name.Repository
 	for _, t := range o.tags {
-		r, err := store.ParseLocal(t)
+		tag, repo, ok, err := store.ParseTag(t)
 		if err != nil {
 			return usagef("invalid tag %q: %v", t, err)
 		}
-		refs = append(refs, r)
+		if ok {
+			refs = append(refs, tag)
+		} else {
+			digestRepos = append(digestRepos, repo)
+		}
 	}
 	bargs := map[string]string{}
 	for _, a := range o.buildArgs {
@@ -260,16 +265,17 @@ func runBuild(cmd *cobra.Command, contextDir string, o buildOptions) error {
 		progress, runOut = io.Discard, io.Discard
 	}
 	img, err := builder.Build(cmd.Context(), builder.Options{
-		ContextDir: contextDir,
-		Dockerfile: dockerfile,
-		Tags:       refs,
-		BuildArgs:  bargs,
-		Target:     o.target,
-		Platform:   plat,
-		Pull:       o.pull,
-		NoCache:    o.noCache,
-		Created:    created,
-		Store:      st,
+		ContextDir:  contextDir,
+		Dockerfile:  dockerfile,
+		Tags:        refs,
+		DigestRepos: digestRepos,
+		BuildArgs:   bargs,
+		Target:      o.target,
+		Platform:    plat,
+		Pull:        o.pull,
+		NoCache:     o.noCache,
+		Created:     created,
+		Store:       st,
 		NewExecutor: func() (executor.Executor, error) {
 			o, err := executorOptions(progress)
 			if err != nil {
@@ -287,6 +293,9 @@ func runBuild(cmd *cobra.Command, contextDir string, o buildOptions) error {
 	d, err := img.Digest()
 	if err != nil {
 		return err
+	}
+	for _, repo := range digestRepos {
+		refs = append(refs, store.DigestTag(repo, d))
 	}
 	for _, r := range refs {
 		fmt.Fprintf(progress, "Successfully tagged %s\n", builder.DisplayName(r))
@@ -345,34 +354,45 @@ func newPushCmd() *cobra.Command {
 
 IMAGE is a local image name or digest (prefix). Without DESTINATION the
 image is pushed to the name it is stored under, which must include a
-registry.`,
+registry. A destination without a tag is tagged sha256-<digest>; aic
+never pushes "latest".`,
 		Example: "  aic push hello registry.example.com/team/hello:1\n  aic push ghcr.io/org/app:1",
 		Args:    args(cobra.RangeArgs(1, 2)),
 		RunE: func(cmd *cobra.Command, a []string) error {
 			src := a[0]
-			var dst name.Reference
-			var err error
+			// Without DESTINATION, push to the image's own name
+			// (unqualified build names are stored under localhost/).
+			parse, target := store.ParseTag, src
 			if len(a) == 2 {
-				dst, err = name.ParseReference(a[1])
-			} else {
-				// Unqualified build tags are stored under localhost/.
-				dst, err = store.ParseLocal(src)
+				parse, target = store.ParseDestination, a[1]
 			}
+			tag, repo, ok, err := parse(target)
 			if err != nil {
 				return usageError{err}
 			}
-			if dst.Context().RegistryStr() == "localhost" {
+			if repo.RegistryStr() == "localhost" {
 				return usagef("%s has no registry; give a destination, e.g. aic push %s registry.example.com/%s",
-					dst.Name(), src, strings.TrimPrefix(dst.Context().RepositoryStr(), "localhost/"))
+					repo.Name(), src, strings.TrimPrefix(repo.RepositoryStr(), "localhost/"))
 			}
 			st, err := openStore()
 			if err != nil {
 				return err
 			}
-			if !quiet {
-				fmt.Fprintf(cmd.ErrOrStderr(), "Pushing %s to %s...\n", src, builder.DisplayName(dst))
+			img, err := st.Image(src)
+			if err != nil {
+				return err
 			}
-			d, err := st.Push(cmd.Context(), src, dst)
+			digest, err := img.Digest()
+			if err != nil {
+				return err
+			}
+			if !ok {
+				tag = store.DigestTag(repo, digest) // never "latest"
+			}
+			if !quiet {
+				fmt.Fprintf(cmd.ErrOrStderr(), "Pushing %s to %s...\n", src, builder.DisplayName(tag))
+			}
+			d, err := st.Push(cmd.Context(), digest.String(), tag)
 			if err != nil {
 				return err
 			}
