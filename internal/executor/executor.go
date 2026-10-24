@@ -28,7 +28,10 @@ import (
 
 // Spec describes one RUN.
 type Spec struct {
-	Image   v1.Image
+	Image v1.Image
+	// Flat, if set, is Image's filesystem as one tar stream (see
+	// store.Flat), read instead of extracting Image's layers.
+	Flat    io.Reader
 	Args    []string // full argv, already wrapped in the shell for shell form
 	Env     []string // KEY=VALUE
 	WorkDir string
@@ -117,8 +120,12 @@ func run(ctx context.Context, fn runFunc, spec Spec, rootfs io.Writer) error {
 		rio.Stderr = io.Discard
 	}
 	// mutate.Extract flattens the layers and applies whiteouts.
-	var image io.ReadCloser = mutate.Extract(spec.Image)
-	defer image.Close()
+	var image io.Reader = spec.Flat
+	if image == nil {
+		rc := mutate.Extract(spec.Image)
+		defer rc.Close()
+		image = rc
+	}
 	if ws := spec.Workspace; ws != nil {
 		dir, err := workspaceDir(ws.Path)
 		if err != nil {
@@ -208,6 +215,11 @@ func withWorkspace(image io.Reader, dir string, write func(*tar.Writer, string) 
 				if _, err := io.Copy(tw, tr); err != nil {
 					return err
 				}
+			}
+			// Read to the end (past the end-of-archive blocks), so a
+			// copy being saved by store.Flat is complete.
+			if _, err := io.Copy(io.Discard, image); err != nil {
+				return err
 			}
 			if err := write(tw, dir+"/"); err != nil {
 				if !errors.Is(err, io.ErrClosedPipe) {

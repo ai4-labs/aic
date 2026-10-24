@@ -190,8 +190,9 @@ func newPruneCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "prune [flags]",
 		Short: "Remove the build cache",
-		Long: `Remove the build cache: the recorded results of build steps, and the
-layers no image uses. The next build runs every step again.
+		Long: `Remove the build cache: the recorded results of build steps, the
+layers no image uses, and the unpacked copies of images that aic run keeps.
+The next build runs every step again.
 
 With --vm, also remove what the macOS VM caches (kernel, initramfs and
 guest); it is downloaded or rebuilt when next needed.`,

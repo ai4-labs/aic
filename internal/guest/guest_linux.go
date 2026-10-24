@@ -9,7 +9,6 @@
 package guest
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -18,6 +17,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"time"
 
 	"golang.org/x/sys/unix"
 
@@ -31,6 +31,7 @@ func Main() {
 		log.Printf("aic-guest: setup: %v", err)
 		poweroff()
 	}
+	startNetwork()
 	ch, err := os.OpenFile("/dev/hvc1", os.O_RDWR|unix.O_NOCTTY, 0)
 	if err != nil {
 		log.Printf("aic-guest: %v", err)
@@ -142,19 +143,8 @@ func setup() error {
 	if err := os.MkdirAll("/etc", 0o755); err != nil {
 		return err
 	}
-	// The kernel configured eth0 with DHCP (ip=dhcp) and recorded the
-	// DNS servers in /proc/net/pnp.
-	var resolv strings.Builder
-	if f, err := os.Open("/proc/net/pnp"); err == nil {
-		sc := bufio.NewScanner(f)
-		for sc.Scan() {
-			if strings.HasPrefix(sc.Text(), "nameserver") {
-				resolv.WriteString(sc.Text() + "\n")
-			}
-		}
-		f.Close()
-	}
-	return os.WriteFile("/etc/resolv.conf", []byte(resolv.String()), 0o644)
+	// startNetwork writes it once DHCP has answered.
+	return os.WriteFile("/etc/resolv.conf", nil, 0o644)
 }
 
 // makeRaw puts the serial port in raw mode so bytes pass through as-is.
@@ -191,6 +181,11 @@ func serve(r io.Reader, w io.Writer) error {
 			return err
 		}
 		if err := proto.ServeRun(r, fw, spec, func(ctx context.Context, image io.Reader, rio proto.IO) proto.Result {
+			if spec.Network == "host" {
+				if err := waitNetwork(10 * time.Second); err != nil {
+					fmt.Fprintf(rio.Stderr, "aic: the VM has no network: %v\n", err)
+				}
+			}
 			res, err := container.Run(ctx, spec, image, rio)
 			if err != nil {
 				res = proto.Result{Error: err.Error()}

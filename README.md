@@ -53,7 +53,7 @@ aic login -i [REGISTRY]          guided login: pick a registry, get help creatin
 aic login [-u USER] [--password-stdin] REGISTRY   log in (credentials are verified first)
 aic logout [-a] [REGISTRY]       remove credentials saved by aic login
 aic images [-q] [--no-trunc]     list local images
-aic prune [--vm]                 remove the build cache (and the VM's cached files)
+aic prune [--vm]                 remove the build cache and unpacked images (and the VM's cached files)
 aic tag IMAGE TARGET...          add names to a local image
 aic rmi [-f] [-a] IMAGE...       remove images (a name untags; an ID removes all its names)
 aic pull [--platform OS/ARCH] IMAGE
@@ -181,8 +181,9 @@ or an AppArmor profile for aic.
 
 - Each `RUN` and `aic run` unpacks the full image (and workspace) into a
   tmpfs, so memory bounds how large they can be (on macOS, the VM's memory).
-- On macOS, every build and run copies the whole image into its VM, which
-  takes a few seconds for large images (about 4 s for the Claude Code
-  example).
+- On macOS, every build and run copies the whole image into its VM. For
+  `aic run`, the store keeps each image unpacked (in `~/.aic/store/flat`,
+  as large as the image's files) so this takes about 1.5 s for the Claude
+  Code example; `aic prune` removes these copies.
 - The macOS VM is arm64 only (Apple silicon), and `RUN` uses the host's
   architecture: no emulation for other `--platform`s yet.

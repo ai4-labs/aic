@@ -166,8 +166,15 @@ func runRun(cmd *cobra.Command, imageName string, command []string, o runOptions
 	if o.tty {
 		env = terminalEnv(env)
 	}
+	// The store keeps the image's filesystem unpacked for the next run.
+	flat, err := st.Flat(img)
+	if err != nil {
+		return err
+	}
+	defer flat.Close()
 	spec := executor.Spec{
 		Image:   img,
+		Flat:    flat,
 		Args:    args,
 		Env:     env,
 		WorkDir: cfg.WorkingDir,

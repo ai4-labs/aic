@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -88,7 +89,7 @@ func Start(ctx context.Context, o Options) (*Machine, error) {
 	}
 
 	boot, err := vz.NewLinuxBootLoader(kernel,
-		vz.WithCommandLine("console=hvc0 ip=dhcp panic=-1 quiet loglevel=3"),
+		vz.WithCommandLine("console=hvc0 panic=-1 quiet loglevel=3"),
 		vz.WithInitrd(initrd))
 	if err != nil {
 		return nil, err
@@ -162,7 +163,14 @@ func Start(ctx context.Context, o Options) (*Machine, error) {
 	if err != nil {
 		return nil, err
 	}
-	mac, err := vz.NewRandomLocallyAdministeredMACAddress()
+	// A MAC address from a small set of slots, so VMs reuse the host's
+	// DHCP leases instead of taking a new one each time.
+	hw, slot, err := macSlot(o.Dir)
+	if err != nil {
+		return nil, err
+	}
+	files = append(files, slot) // holding the slot until the VM stops
+	mac, err := vz.NewMACAddress(hw)
 	if err != nil {
 		return nil, err
 	}
@@ -353,4 +361,27 @@ func removeStaleLogs(dir string) {
 		}
 		os.Remove(p)
 	}
+}
+
+// macSlot picks the first free MAC address slot in dir/slots, holding a
+// lock on it until the returned file is closed. Concurrent VMs get
+// different addresses; consecutive ones reuse the same.
+func macSlot(dir string) (net.HardwareAddr, *os.File, error) {
+	sdir := filepath.Join(dir, "slots")
+	if err := os.MkdirAll(sdir, 0o755); err != nil {
+		return nil, nil, err
+	}
+	for i := 0; i < 256; i++ {
+		f, err := os.OpenFile(filepath.Join(sdir, strconv.Itoa(i)), os.O_RDWR|os.O_CREATE, 0o644)
+		if err != nil {
+			return nil, nil, err
+		}
+		if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+			f.Close()
+			continue
+		}
+		// Locally administered, unicast: 02:61:69:63 ("aic") + slot.
+		return net.HardwareAddr{0x02, 0x61, 0x69, 0x63, 0x00, byte(i)}, f, nil
+	}
+	return nil, nil, errors.New("too many VMs running")
 }

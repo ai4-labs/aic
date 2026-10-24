@@ -149,6 +149,9 @@ func (s *Store) PruneCache() (int, error) {
 				n++
 			}
 		}
+		if err := s.gcFlat(nil); err != nil { // drop all flattened copies
+			return err
+		}
 		im, err := s.indexManifest()
 		if err != nil {
 			return err

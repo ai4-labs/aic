@@ -235,6 +235,9 @@ func (s *Store) gc(im *v1.IndexManifest) error {
 			keep[l.Digest.Hex] = true
 		}
 	}
+	if err := s.gcFlat(keep); err != nil {
+		return err
+	}
 	dir := filepath.Join(s.dir, "blobs", "sha256")
 	ents, err := os.ReadDir(dir)
 	if errors.Is(err, fs.ErrNotExist) {
