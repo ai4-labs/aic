@@ -33,11 +33,10 @@ func guestBinary(ctx context.Context, dir string, progress io.Writer) ([]byte, e
 	if b, err := guestFS.ReadFile("guest/aic-guest-linux-" + runtime.GOARCH); err == nil && len(b) > 0 {
 		return b, nil
 	}
-	info, ok := debug.ReadBuildInfo()
-	if !ok || info.Main.Path != modulePath || info.Main.Version == "" || info.Main.Version == "(devel)" {
+	version := moduleVersion()
+	if version == "" {
 		return nil, errors.New("this aic binary was built without the build VM's guest; build it with `make`, or install it with `go install " + modulePath + "/cmd/aic@latest`")
 	}
-	version := info.Main.Version
 	cached := filepath.Join(dir, "guest", "aic-guest-"+strings.ReplaceAll(version, "/", "_")+"-linux-"+runtime.GOARCH)
 	if b, err := os.ReadFile(cached); err == nil && len(b) > 0 {
 		return b, nil
@@ -55,6 +54,30 @@ func guestBinary(ctx context.Context, dir string, progress io.Writer) ([]byte, e
 		return nil, err
 	}
 	return b, os.Rename(tmp, cached)
+}
+
+// moduleVersion is the version of aic's module in this binary, whether
+// it is the main module (go install) or a dependency (a program using
+// package aic), or "" for a local build.
+func moduleVersion() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return ""
+	}
+	mods := append([]*debug.Module{&info.Main}, info.Deps...)
+	for _, m := range mods {
+		if m.Path != modulePath {
+			continue
+		}
+		if m.Replace != nil {
+			return "" // a local replacement has no downloadable source
+		}
+		if m.Version == "" || m.Version == "(devel)" {
+			return ""
+		}
+		return m.Version
+	}
+	return ""
 }
 
 // buildGuest cross-compiles cmd/aic-guest from the module source of the

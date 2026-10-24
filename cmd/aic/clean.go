@@ -4,9 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -25,20 +23,16 @@ initramfs. Registry credentials (aic login) are kept.
 aic asks for confirmation unless --force is given.`,
 		Args: args(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			st, err := openStore()
+			c, err := newClient(nil)
 			if err != nil {
 				return err
 			}
-			list, err := st.List()
-			if err != nil {
-				return err
-			}
-			vm, err := vmDir()
+			list, err := c.Images()
 			if err != nil {
 				return err
 			}
 			if !force {
-				ok, err := confirm(cmd, fmt.Sprintf("Remove %d image(s), all caches in %s and the VM files in %s?", len(list), st.Dir(), vm))
+				ok, err := confirm(cmd, fmt.Sprintf("Remove %d image(s), all caches in %s and the VM files in %s?", len(list), c.StoreDir(), c.VMDir()))
 				if err != nil {
 					return err
 				}
@@ -46,15 +40,11 @@ aic asks for confirmation unless --force is given.`,
 					return errors.New("cancelled")
 				}
 			}
-			n, freed, err := st.Clean()
+			n, freed, err := c.Clean()
 			if err != nil {
 				return err
 			}
-			vmFreed := dirSize(vm)
-			if err := os.RemoveAll(vm); err != nil {
-				return err
-			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Removed %d image(s); freed %s\n", n, humanSize(freed+vmFreed))
+			fmt.Fprintf(cmd.OutOrStdout(), "Removed %d image(s); freed %s\n", n, humanSize(freed))
 			return nil
 		},
 	}
@@ -76,17 +66,4 @@ func confirm(cmd *cobra.Command, question string) (bool, error) {
 	}
 	answer := strings.ToLower(strings.TrimSpace(line))
 	return answer == "y" || answer == "yes", nil
-}
-
-func dirSize(dir string) int64 {
-	var n int64
-	filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
-		if err == nil && d.Type().IsRegular() {
-			if info, err := d.Info(); err == nil {
-				n += info.Size()
-			}
-		}
-		return nil
-	})
-	return n
 }

@@ -265,7 +265,11 @@ func (s *Store) gc(im *v1.IndexManifest) error {
 func (s *Store) Clean() (images int, freed int64, err error) {
 	err = s.withLock(func() error {
 		if im, err := s.indexManifest(); err == nil {
-			images = len(im.Manifests)
+			seen := map[v1.Hash]bool{} // one descriptor per name
+			for _, d := range im.Manifests {
+				seen[d.Digest] = true
+			}
+			images = len(seen)
 		}
 		ents, err := os.ReadDir(s.dir)
 		if err != nil {

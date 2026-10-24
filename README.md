@@ -144,6 +144,35 @@ Claude Code needs the network to reach the API (`--network=host`; on macOS
 that is the VM's network, not your Mac's localhost). Its settings and login
 are not kept between runs; pass the API key with `-e` each time.
 
+## Go package
+
+Every command is also a method of `aic.Client` in the
+[`github.com/ai4-labs/aic`](https://pkg.go.dev/github.com/ai4-labs/aic) package:
+
+```go
+func main() {
+	aic.Init() // first: containers re-execute the program on Linux
+
+	c, err := aic.New(aic.Options{Progress: os.Stderr})
+	...
+	img, err := c.Build(ctx, aic.BuildOptions{ContextDir: ".", Tags: []string{"app"}})
+	code, err := c.Run(ctx, aic.RunOptions{
+		Image:     img.Digest,
+		Command:   []string{"make", "test"},
+		Workspace: ".",
+		CopyBack:  true,
+		Stdout:    os.Stdout,
+		Stderr:    os.Stderr,
+	})
+}
+```
+
+`Build`, `Run`, `Pull`, `Push`, `Images`, `Tag`, `Remove`, `Prune`, `Clean`,
+`Login`, `Logout` and `LoggedInUser` correspond to the commands. Errors caused
+by invalid arguments wrap `aic.ErrInvalid`. On macOS, the program needs the
+`com.apple.security.virtualization` entitlement to run containers; without it,
+the first build or run signs the executable (ad hoc) and restarts it.
+
 ## The VM (macOS)
 
 On macOS, each `aic build` that has `RUN` steps, and each `aic run`, boots its

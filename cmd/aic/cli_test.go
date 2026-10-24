@@ -370,18 +370,6 @@ func TestParseWorkspace(t *testing.T) {
 	}
 }
 
-func TestTerminalEnv(t *testing.T) {
-	t.Setenv("TERM", "screen-256color")
-	t.Setenv("COLORTERM", "truecolor")
-	got := strings.Join(terminalEnv([]string{"PATH=/bin"}), " ")
-	if got != "PATH=/bin TERM=screen-256color COLORTERM=truecolor" {
-		t.Errorf("env = %s", got)
-	}
-	if got := strings.Join(terminalEnv([]string{"TERM=vt100"}), " "); got != "TERM=vt100 COLORTERM=truecolor" {
-		t.Errorf("env = %s, want the image's TERM kept", got)
-	}
-}
-
 func TestCLIClean(t *testing.T) {
 	t.Setenv("AIC_STORE", filepath.Join(t.TempDir(), "store"))
 	t.Setenv("AIC_VM_DIR", filepath.Join(t.TempDir(), "vm"))

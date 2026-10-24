@@ -269,6 +269,12 @@ func (s *Store) keychain() authn.Keychain {
 // Pull fetches ref for platform and stores it under ref. It returns the
 // stored image.
 func (s *Store) Pull(ctx context.Context, ref name.Reference, platform v1.Platform) (v1.Image, error) {
+	return s.PullWithProgress(ctx, ref, platform, s.Progress)
+}
+
+// PullWithProgress is like Pull, reporting layers to progress instead of
+// s.Progress.
+func (s *Store) PullWithProgress(ctx context.Context, ref name.Reference, platform v1.Platform, progress io.Writer) (v1.Image, error) {
 	opts := append(s.remoteOptions(ctx), remote.WithPlatform(platform))
 	img, err := remote.Image(ref, opts...)
 	if err != nil {
@@ -281,7 +287,7 @@ func (s *Store) Pull(ctx context.Context, ref name.Reference, platform v1.Platfo
 	if cf.OS != platform.OS || cf.Architecture != platform.Architecture {
 		return nil, fmt.Errorf("%s: image is for %s/%s, not %s", ref, cf.OS, cf.Architecture, platform)
 	}
-	if err := s.fetchLayers(ctx, img); err != nil {
+	if err := s.fetchLayers(ctx, img, progress); err != nil {
 		return nil, err
 	}
 	if err := s.Put(img, ref); err != nil {

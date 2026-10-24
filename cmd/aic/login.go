@@ -8,20 +8,15 @@ import (
 	"os"
 	"strings"
 
-	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
+	"github.com/ai4-labs/aic"
 	"github.com/ai4-labs/aic/internal/auth"
 )
 
-func registryName(reg name.Registry) string {
-	if reg.RegistryStr() == name.DefaultRegistry {
-		return "docker.io"
-	}
-	return reg.RegistryStr()
-}
+func registryName(reg name.Registry) string { return aic.RegistryName(reg) }
 
 func authFile(flag string) (string, error) {
 	if flag != "" {
@@ -111,8 +106,12 @@ func runLogin(cmd *cobra.Command, registry string, o loginOptions) error {
 	}
 	out, errOut := cmd.OutOrStdout(), cmd.ErrOrStderr()
 
+	c, err := aic.New(aic.Options{AuthFile: path})
+	if err != nil {
+		return err
+	}
 	if o.getLogin {
-		user, err := loggedInUser(f, path, reg)
+		user, err := c.LoggedInUser(registry)
 		if err != nil {
 			return err
 		}
@@ -173,38 +172,14 @@ func runLogin(cmd *cobra.Command, registry string, o loginOptions) error {
 		}
 		password = string(b)
 	}
-	if user == "" || password == "" {
-		return usagef("a user name and a password are required")
-	}
-
-	if err := auth.Verify(cmd.Context(), reg, user, password); err != nil {
-		return fmt.Errorf("logging in to %s: %w", registryName(reg), err)
-	}
-	if err := f.Login(reg, user, password); err != nil {
-		return fmt.Errorf("saving credentials: %w", err)
+	if err := c.Login(cmd.Context(), aic.LoginOptions{Registry: registry, Username: user, Password: password}); err != nil {
+		return err
 	}
 	if f.Store() == "" {
 		fmt.Fprintf(errOut, "Credentials saved unencrypted in %s (readable only by you). Install a Docker credential helper to use the system keychain.\n", f.Path())
 	}
 	fmt.Fprintln(out, "Login Succeeded!")
 	return nil
-}
-
-// loggedInUser finds the user for reg in aic's file, then in Docker's and
-// podman's credentials.
-func loggedInUser(f *auth.File, path string, reg name.Registry) (string, error) {
-	if u, err := f.Username(reg); err != nil || u != "" {
-		return u, err
-	}
-	a, err := auth.Keychain(path).Resolve(reg)
-	if err != nil || a == authn.Anonymous {
-		return "", err
-	}
-	cfg, err := a.Authorization()
-	if err != nil {
-		return "", err
-	}
-	return cfg.Username, nil
 }
 
 func newLogoutCmd() *cobra.Command {
@@ -229,13 +204,13 @@ func newLogoutCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			f, err := auth.OpenDefault(path)
+			c, err := aic.New(aic.Options{AuthFile: path})
 			if err != nil {
 				return err
 			}
 			out := cmd.OutOrStdout()
 			if all {
-				if _, err := f.LogoutAll(); err != nil {
+				if err := c.LogoutAll(); err != nil {
 					return err
 				}
 				fmt.Fprintln(out, "Removed login credentials for all registries")
@@ -245,12 +220,12 @@ func newLogoutCmd() *cobra.Command {
 			if err != nil {
 				return usageError{err}
 			}
-			found, err := f.Logout(reg)
+			found, err := c.Logout(a[0])
 			if err != nil {
 				return err
 			}
 			if !found {
-				if u, _ := loggedInUser(f, path, reg); u != "" {
+				if u, _ := c.LoggedInUser(a[0]); u != "" {
 					return fmt.Errorf("not logged in to %s with aic login; the credentials in use come from another tool's configuration", registryName(reg))
 				}
 				return fmt.Errorf("not logged in to %s", registryName(reg))

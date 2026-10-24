@@ -5,11 +5,11 @@ package main
 import (
 	"os"
 
-	"github.com/ai4-labs/aic/internal/container"
+	"github.com/ai4-labs/aic"
 )
 
 func main() {
 	// RUN containers re-execute this binary on Linux.
-	container.Init()
+	aic.Init()
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }

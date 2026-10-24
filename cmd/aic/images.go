@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -12,7 +11,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/spf13/cobra"
 
-	"github.com/ai4-labs/aic/internal/store"
+	"github.com/ai4-labs/aic"
 )
 
 func newImagesCmd() *cobra.Command {
@@ -26,11 +25,11 @@ SIZE is the size of the image as stored and pushed: its config plus
 compressed layers.`,
 		Args: args(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			st, err := openStore()
+			c, err := newClient(nil)
 			if err != nil {
 				return err
 			}
-			list, err := st.List()
+			list, err := c.Images()
 			if err != nil {
 				return err
 			}
@@ -50,17 +49,17 @@ func imageID(d string, noTrunc bool) string {
 	return strings.TrimPrefix(d, "sha256:")[:12]
 }
 
-func printImages(w io.Writer, list []store.ImageInfo, quiet, noTrunc bool, now time.Time) {
+func printImages(w io.Writer, list []aic.ImageInfo, quiet, noTrunc bool, now time.Time) {
 	if quiet {
 		for _, info := range list {
-			fmt.Fprintln(w, imageID(info.Digest.String(), noTrunc))
+			fmt.Fprintln(w, imageID(info.Digest, noTrunc))
 		}
 		return
 	}
 	tw := tabwriter.NewWriter(w, 0, 0, 3, ' ', 0)
 	fmt.Fprintln(tw, "REPOSITORY\tTAG\tIMAGE ID\tCREATED\tSIZE")
 	for _, info := range list {
-		id := imageID(info.Digest.String(), noTrunc)
+		id := imageID(info.Digest, noTrunc)
 		created, size := humanAgo(now, info.Created), humanSize(info.Size)
 		if len(info.Names) == 0 {
 			fmt.Fprintf(tw, "<none>\t<none>\t%s\t%s\t%s\n", id, created, size)
@@ -151,11 +150,11 @@ is required. Layers no longer used by any image are deleted.`,
 			return nil
 		}),
 		RunE: func(cmd *cobra.Command, a []string) error {
-			st, err := openStore()
+			c, err := newClient(nil)
 			if err != nil {
 				return err
 			}
-			results, err := st.Remove(a, all, force)
+			results, err := c.Remove(a, all, force)
 			if err != nil {
 				return err
 			}
@@ -171,7 +170,7 @@ is required. Layers no longer used by any image are deleted.`,
 					fmt.Fprintf(out, "Untagged: %s\n", n)
 				}
 				for _, d := range r.Deleted {
-					fmt.Fprintf(out, "Deleted: %s\n", d.Hex)
+					fmt.Fprintf(out, "Deleted: %s\n", strings.TrimPrefix(d, "sha256:"))
 				}
 			}
 			if failed > 0 {
@@ -198,24 +197,17 @@ With --vm, also remove what the macOS VM caches (kernel, initramfs and
 guest); it is downloaded or rebuilt when next needed.`,
 		Args: args(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			st, err := openStore()
+			c, err := newClient(nil)
 			if err != nil {
 				return err
 			}
-			n, err := st.PruneCache()
+			n, err := c.Prune(vmFiles)
 			if err != nil {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "Removed %d build cache entries\n", n)
 			if vmFiles {
-				dir, err := vmDir()
-				if err != nil {
-					return err
-				}
-				if err := os.RemoveAll(dir); err != nil {
-					return err
-				}
-				fmt.Fprintf(cmd.OutOrStdout(), "Removed %s\n", dir)
+				fmt.Fprintf(cmd.OutOrStdout(), "Removed %s\n", c.VMDir())
 			}
 			return nil
 		},
@@ -237,39 +229,11 @@ A name that already points at another image is moved.`,
 		Example: "  aic tag hello hello:1.0\n  aic tag 1c8cd8f6ca12 ghcr.io/org/hello:1.0",
 		Args:    args(cobra.MinimumNArgs(2)),
 		RunE: func(cmd *cobra.Command, a []string) error {
-			var tags []name.Tag
-			var repos []name.Repository
-			for _, t := range a[1:] {
-				tag, repo, ok, err := store.ParseTag(t)
-				if err != nil {
-					return usageError{err}
-				}
-				if ok {
-					tags = append(tags, tag)
-				} else {
-					repos = append(repos, repo)
-				}
-			}
-			st, err := openStore()
+			c, err := newClient(nil)
 			if err != nil {
 				return err
 			}
-			img, err := st.Image(a[0])
-			if err != nil {
-				return err
-			}
-			d, err := img.Digest()
-			if err != nil {
-				return err
-			}
-			var refs []name.Reference
-			for _, t := range tags {
-				refs = append(refs, t)
-			}
-			for _, r := range repos {
-				refs = append(refs, store.DigestTag(r, d))
-			}
-			return st.Put(img, refs...)
+			return c.Tag(a[0], a[1:]...)
 		},
 	}
 }

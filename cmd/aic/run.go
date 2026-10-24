@@ -1,7 +1,6 @@
 package main
 
 import (
-	"archive/tar"
 	"bytes"
 	"errors"
 	"fmt"
@@ -11,16 +10,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/google/go-containerregistry/pkg/name"
-	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
-	"github.com/ai4-labs/aic/internal/builder"
-	"github.com/ai4-labs/aic/internal/executor"
-	"github.com/ai4-labs/aic/internal/proto"
-	"github.com/ai4-labs/aic/internal/store"
-	"github.com/ai4-labs/aic/internal/workspace"
+	"github.com/ai4-labs/aic"
 )
 
 // Exit codes of aic run when the command itself didn't run.
@@ -87,7 +80,7 @@ run, or 127 if it was not found.`,
 					return es
 				}
 				var ue usageError
-				if errors.As(err, &ue) {
+				if errors.As(err, &ue) || errors.Is(err, aic.ErrInvalid) {
 					return err
 				}
 				return exitStatus{exitRunFailed, err}
@@ -114,17 +107,13 @@ func runRun(cmd *cobra.Command, imageName string, command []string, o runOptions
 	if o.network != "none" && o.network != "host" {
 		return usagef("invalid --network %q: want none or host", o.network)
 	}
-	plat, err := parsePlatform(o.platform)
-	if err != nil {
-		return err
-	}
 	var hostDir, wsPath string
 	if o.copyBack && o.workspace == "" {
 		return usagef("--copy-back needs a workspace (-w DIR)")
 	}
 	if o.workspace != "" {
-		hostDir, wsPath, err = parseWorkspace(o.workspace)
-		if err != nil {
+		var err error
+		if hostDir, wsPath, err = parseWorkspace(o.workspace); err != nil {
 			return err
 		}
 	}
@@ -139,29 +128,7 @@ func runRun(cmd *cobra.Command, imageName string, command []string, o runOptions
 	if o.tty && o.interactive && inFd < 0 {
 		return usagef("-t needs a terminal on standard input; drop -t to pipe input")
 	}
-
-	st, err := openStore()
-	if err != nil {
-		return err
-	}
-	showPullProgress(st, stderr)
-	img, err := runImage(cmd, st, imageName, plat)
-	if err != nil {
-		return err
-	}
-	cf, err := img.ConfigFile()
-	if err != nil {
-		return err
-	}
-	cfg := cf.Config
-	args := append(append([]string{}, cfg.Entrypoint...), cfg.Cmd...)
-	if len(command) > 0 {
-		args = append(append([]string{}, cfg.Entrypoint...), command...)
-	}
-	if len(args) == 0 {
-		return usagef("%s has no default command; give one after the image name", imageName)
-	}
-	env := append([]string{}, cfg.Env...)
+	var env []string
 	for _, e := range o.env {
 		if !strings.Contains(e, "=") {
 			v, ok := os.LookupEnv(e)
@@ -172,65 +139,44 @@ func runRun(cmd *cobra.Command, imageName string, command []string, o runOptions
 		}
 		env = append(env, e)
 	}
-	if o.tty {
-		env = terminalEnv(env)
-	}
-	// The store keeps the image's filesystem unpacked for the next run.
-	flat, err := st.Flat(img)
-	if err != nil {
-		return err
-	}
-	defer flat.Close()
-	spec := executor.Spec{
-		Image:   img,
-		Flat:    flat,
-		Args:    args,
-		Env:     env,
-		WorkDir: cfg.WorkingDir,
-		User:    cfg.User,
-		Network: o.network,
-		Stdout:  stdout,
-		Stderr:  stderr,
-	}
-	if o.user != "" {
-		spec.User = o.user
-	}
-	var snap workspace.Snapshot
-	if hostDir != "" {
-		spec.WorkDir = wsPath
-		spec.Workspace = &executor.Workspace{
-			Path: wsPath,
-			Write: func(tw *tar.Writer, prefix string) (err error) {
-				snap, err = workspace.Pack(tw, hostDir, prefix)
-				return err
-			},
-		}
-	}
-	if o.workdir != "" {
-		spec.WorkDir = o.workdir
+	ro := aic.RunOptions{
+		Image:         imageName,
+		Command:       command,
+		Env:           env,
+		User:          o.user,
+		WorkDir:       o.workdir,
+		Network:       o.network,
+		Platform:      o.platform,
+		Workspace:     hostDir,
+		WorkspacePath: wsPath,
+		CopyBack:      o.copyBack,
+		Stdout:        stdout,
+		Stderr:        stderr,
+		TTY:           o.tty,
+		Progress:      stderr,
 	}
 	if o.interactive {
-		spec.Stdin = stdin
+		ro.Stdin = stdin
 	}
 	// Signing may re-execute aic, so do it before touching the terminal.
 	if err := ensureVMAccess(stderr); err != nil {
 		return err
 	}
 	if o.tty {
-		spec.TTY = true
 		sizeFd := outFd
 		if sizeFd < 0 {
 			sizeFd = inFd
 		}
 		if sizeFd >= 0 {
 			if w, h, err := term.GetSize(sizeFd); err == nil {
-				spec.Size = proto.Size{Rows: uint16(h), Cols: uint16(w)}
+				ro.Size = aic.TerminalSize{Rows: uint16(h), Cols: uint16(w)}
 			}
 			resize, stop := watchResize(sizeFd)
 			defer stop()
-			spec.Resize = resize
+			ro.Resize = resize
 		}
 		if o.interactive {
+			ro.Progress = crlfWriter{stderr} // the terminal is in raw mode
 			old, err := term.MakeRaw(inFd)
 			if err != nil {
 				return err
@@ -238,51 +184,18 @@ func runRun(cmd *cobra.Command, imageName string, command []string, o runOptions
 			defer term.Restore(inFd, old)
 		}
 	}
-
-	// The executor writes the container's copy of the workspace here.
-	var export io.Writer // nil: nothing comes back
-	var exportFile *os.File
-	if o.copyBack {
-		exportFile, err = os.CreateTemp("", "aic-workspace-*.tar")
-		if err != nil {
-			return err
-		}
-		defer os.Remove(exportFile.Name())
-		defer exportFile.Close()
-		export = exportFile
-	}
-
-	progress := stderr
-	if o.tty && o.interactive {
-		progress = crlfWriter{stderr} // the terminal is in raw mode
-	}
-	opts, err := executorOptions(progress)
+	c, err := newClient(stderr)
 	if err != nil {
 		return err
 	}
-	ex, err := executor.NewNative(opts)
-	if err != nil {
+	code, err := c.Run(cmd.Context(), ro)
+	switch {
+	case errors.Is(err, aic.ErrCommandNotFound):
+		return exitStatus{exitNotFound, err}
+	case err != nil:
 		return err
-	}
-	defer ex.Close()
-	runErr := ex.Run(cmd.Context(), spec, export)
-	var exitErr *executor.ExitError
-	if runErr != nil && !errors.As(runErr, &exitErr) {
-		if strings.Contains(runErr.Error(), "executable file not found") {
-			return exitStatus{exitNotFound, runErr}
-		}
-		return runErr
-	}
-	if exportFile != nil {
-		if _, err := exportFile.Seek(0, io.SeekStart); err != nil {
-			return err
-		}
-		if _, err := workspace.Apply(hostDir, exportFile, snap); err != nil {
-			return fmt.Errorf("copying the workspace back: %w", err)
-		}
-	}
-	if exitErr != nil {
-		return exitStatus{code: exitErr.Code}
+	case code != 0:
+		return exitStatus{code: code}
 	}
 	return nil
 }
@@ -310,23 +223,6 @@ func parseWorkspace(s string) (hostDir, ctrPath string, err error) {
 	return hostDir, path.Clean(ctrPath), nil
 }
 
-// runImage finds ref in the store, pulling it if it isn't there.
-func runImage(cmd *cobra.Command, st *store.Store, ref string, plat v1.Platform) (v1.Image, error) {
-	img, err := st.Image(ref)
-	if err == nil {
-		return img, nil
-	}
-	if !errors.Is(err, store.ErrNotFound) {
-		return nil, err
-	}
-	r, perr := name.ParseReference(ref)
-	if perr != nil {
-		return nil, usageError{perr}
-	}
-	fmt.Fprintf(cmd.ErrOrStderr(), "Pulling %s (%s)...\n", builder.DisplayName(r), platformString(plat))
-	return st.Pull(cmd.Context(), r, plat)
-}
-
 // crlfWriter turns \n into \r\n, for writing to a terminal in raw mode.
 type crlfWriter struct{ w io.Writer }
 
@@ -335,29 +231,4 @@ func (c crlfWriter) Write(p []byte) (int, error) {
 		return 0, err
 	}
 	return len(p), nil
-}
-
-// terminalEnv adds the host's terminal type to env, unless the image or
-// -e set it: without TERM, programs assume a dumb terminal and don't use
-// colors.
-func terminalEnv(env []string) []string {
-	has := func(k string) bool {
-		for _, e := range env {
-			if strings.HasPrefix(e, k+"=") {
-				return true
-			}
-		}
-		return false
-	}
-	if !has("TERM") {
-		t := os.Getenv("TERM")
-		if t == "" || t == "dumb" {
-			t = "xterm-256color"
-		}
-		env = append(env, "TERM="+t)
-	}
-	if v, ok := os.LookupEnv("COLORTERM"); ok && !has("COLORTERM") {
-		env = append(env, "COLORTERM="+v)
-	}
-	return env
 }

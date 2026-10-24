@@ -7,19 +7,13 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"runtime/debug"
-	"strconv"
 	"strings"
-	"time"
 
-	"github.com/google/go-containerregistry/pkg/name"
-	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/spf13/cobra"
 
-	"github.com/ai4-labs/aic/internal/auth"
+	"github.com/ai4-labs/aic"
 	"github.com/ai4-labs/aic/internal/builder"
-	"github.com/ai4-labs/aic/internal/executor"
 	"github.com/ai4-labs/aic/internal/store"
 )
 
@@ -75,7 +69,7 @@ func runWithInput(argv []string, stdin io.Reader, stdout, stderr io.Writer) int 
 	}
 	fmt.Fprintf(stderr, "%s: %v\n", cmd.CommandPath(), err)
 	var ue usageError
-	if errors.As(err, &ue) || strings.HasPrefix(err.Error(), "unknown command") {
+	if errors.As(err, &ue) || errors.Is(err, aic.ErrInvalid) || strings.HasPrefix(err.Error(), "unknown command") {
 		fmt.Fprintf(stderr, "Run '%s --help' for usage.\n", cmd.CommandPath())
 		return exitUsage
 	}
@@ -97,74 +91,10 @@ func newRootCmd() *cobra.Command {
 	return root
 }
 
-func openStore() (*store.Store, error) {
-	dir, err := store.DefaultDir()
-	if err != nil {
-		return nil, err
-	}
-	s, err := store.Open(dir)
-	if err != nil {
-		return nil, err
-	}
-	s.UserAgent = "aic/" + version()
-	authPath, err := auth.DefaultPath()
-	if err != nil {
-		return nil, err
-	}
-	s.Keychain = auth.Keychain(authPath)
-	return s, nil
-}
-
-// vmDir is where the macOS build VM keeps its files: $AIC_VM_DIR, or
-// "vm" next to the image store.
-func vmDir() (string, error) {
-	if d := os.Getenv("AIC_VM_DIR"); d != "" {
-		return d, nil
-	}
-	st, err := store.DefaultDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(filepath.Dir(st), "vm"), nil
-}
-
-// executorOptions configures RUN. $AIC_VM_CPUS and $AIC_VM_MEMORY (MiB)
-// size a VM booted for a build on macOS.
-func executorOptions(progress io.Writer) (executor.Options, error) {
-	dir, err := vmDir()
-	if err != nil {
-		return executor.Options{}, err
-	}
-	o := executor.Options{Dir: dir, Progress: progress}
-	if n, err := strconv.ParseUint(os.Getenv("AIC_VM_CPUS"), 10, 32); err == nil {
-		o.CPUs = uint(n)
-	}
-	if n, err := strconv.ParseUint(os.Getenv("AIC_VM_MEMORY"), 10, 64); err == nil {
-		o.MemoryMiB = n
-	}
-	return o, nil
-}
-
-func parsePlatform(s string) (v1.Platform, error) {
-	if s == "" {
-		return builder.DefaultPlatform(), nil
-	}
-	p, err := v1.ParsePlatform(s)
-	if err != nil {
-		return v1.Platform{}, usageError{err}
-	}
-	if p.OS == "" || p.Architecture == "" {
-		return v1.Platform{}, usagef("invalid platform %q: want OS/ARCH[/VARIANT]", s)
-	}
-	return *p, nil
-}
-
-func platformString(p v1.Platform) string {
-	s := p.OS + "/" + p.Architecture
-	if p.Variant != "" {
-		s += "/" + p.Variant
-	}
-	return s
+// newClient opens the image store; progress receives pull and VM setup
+// messages (nil discards them).
+func newClient(progress io.Writer) (*aic.Client, error) {
+	return aic.New(aic.Options{Progress: progress, UserAgent: "aic/" + version()})
 }
 
 type buildOptions struct {
@@ -216,34 +146,6 @@ isolate a step.`,
 
 func runBuild(cmd *cobra.Command, contextDir string, o buildOptions) error {
 	stdout, stderr := cmd.OutOrStdout(), cmd.ErrOrStderr()
-	plat, err := parsePlatform(o.platform)
-	if err != nil {
-		return err
-	}
-	if fi, err := os.Stat(contextDir); err != nil || !fi.IsDir() {
-		return usagef("context %q is not a directory", contextDir)
-	}
-	dockerfile := o.file
-	if dockerfile == "" {
-		dockerfile = filepath.Join(contextDir, "Dockerfile")
-	}
-	if _, err := os.Stat(dockerfile); err != nil {
-		return usagef("no Dockerfile: %v", err)
-	}
-
-	var refs []name.Reference
-	var digestRepos []name.Repository
-	for _, t := range o.tags {
-		tag, repo, ok, err := store.ParseTag(t)
-		if err != nil {
-			return usagef("invalid tag %q: %v", t, err)
-		}
-		if ok {
-			refs = append(refs, tag)
-		} else {
-			digestRepos = append(digestRepos, repo)
-		}
-	}
 	bargs := map[string]string{}
 	for _, a := range o.buildArgs {
 		k, v, ok := strings.Cut(a, "=")
@@ -254,63 +156,34 @@ func runBuild(cmd *cobra.Command, contextDir string, o buildOptions) error {
 		}
 		bargs[k] = v
 	}
-	var created time.Time
-	if sde := os.Getenv("SOURCE_DATE_EPOCH"); sde != "" {
-		sec, err := strconv.ParseInt(sde, 10, 64)
-		if err != nil {
-			return usagef("invalid SOURCE_DATE_EPOCH %q", sde)
-		}
-		created = time.Unix(sec, 0)
-	}
-
-	st, err := openStore()
-	if err != nil {
-		return err
-	}
 	progress, runOut := stderr, stdout
-	if !o.quiet {
-		showPullProgress(st, stderr)
-	}
 	if o.quiet {
 		progress, runOut = io.Discard, io.Discard
 	}
-	img, err := builder.Build(cmd.Context(), builder.Options{
-		ContextDir:  contextDir,
-		Dockerfile:  dockerfile,
-		Tags:        refs,
-		DigestRepos: digestRepos,
-		BuildArgs:   bargs,
-		Target:      o.target,
-		Platform:    plat,
-		Pull:        o.pull,
-		NoCache:     o.noCache,
-		Created:     created,
-		Store:       st,
-		NewExecutor: func() (executor.Executor, error) {
-			o, err := executorOptions(progress)
-			if err != nil {
-				return nil, err
-			}
-			return executor.NewNative(o)
-		},
-		Progress: progress,
-		Stdout:   runOut,
-		Stderr:   progress,
+	c, err := newClient(progress)
+	if err != nil {
+		return err
+	}
+	img, err := c.Build(cmd.Context(), aic.BuildOptions{
+		ContextDir: contextDir,
+		Dockerfile: o.file,
+		Tags:       o.tags,
+		BuildArgs:  bargs,
+		Target:     o.target,
+		Platform:   o.platform,
+		Pull:       o.pull,
+		NoCache:    o.noCache,
+		Progress:   progress,
+		Stdout:     runOut,
+		Stderr:     progress,
 	})
 	if err != nil {
 		return err
 	}
-	d, err := img.Digest()
-	if err != nil {
-		return err
+	for _, n := range img.Names {
+		fmt.Fprintf(progress, "Successfully tagged %s\n", n)
 	}
-	for _, repo := range digestRepos {
-		refs = append(refs, store.DigestTag(repo, d))
-	}
-	for _, r := range refs {
-		fmt.Fprintf(progress, "Successfully tagged %s\n", builder.DisplayName(r))
-	}
-	fmt.Fprintln(stdout, d)
+	fmt.Fprintln(stdout, img.Digest)
 	return nil
 }
 
@@ -323,27 +196,15 @@ func newPullCmd() *cobra.Command {
 		Example: "  aic pull alpine:3.20\n  aic pull --platform linux/amd64 ghcr.io/org/app:1",
 		Args:    args(cobra.ExactArgs(1)),
 		RunE: func(cmd *cobra.Command, a []string) error {
-			ref, err := name.ParseReference(a[0])
-			if err != nil {
-				return usageError{err}
+			progress := cmd.ErrOrStderr()
+			if quiet {
+				progress = nil
 			}
-			plat, err := parsePlatform(platform)
-			if err != nil {
-				return err
-			}
-			st, err := openStore()
+			c, err := newClient(progress)
 			if err != nil {
 				return err
 			}
-			if !quiet {
-				showPullProgress(st, cmd.ErrOrStderr())
-				fmt.Fprintf(cmd.ErrOrStderr(), "Pulling %s (%s)...\n", builder.DisplayName(ref), platformString(plat))
-			}
-			img, err := st.Pull(cmd.Context(), ref, plat)
-			if err != nil {
-				return err
-			}
-			d, err := img.Digest()
+			d, err := c.Pull(cmd.Context(), a[0], platform)
 			if err != nil {
 				return err
 			}
@@ -370,40 +231,19 @@ never pushes "latest".`,
 		Example: "  aic push hello registry.example.com/team/hello:1\n  aic push ghcr.io/org/app:1",
 		Args:    args(cobra.RangeArgs(1, 2)),
 		RunE: func(cmd *cobra.Command, a []string) error {
-			src := a[0]
-			// Without DESTINATION, push to the image's own name
-			// (unqualified build names are stored under localhost/).
-			parse, target := store.ParseTag, src
+			progress := cmd.ErrOrStderr()
+			if quiet {
+				progress = nil
+			}
+			c, err := newClient(progress)
+			if err != nil {
+				return err
+			}
+			dst := ""
 			if len(a) == 2 {
-				parse, target = store.ParseDestination, a[1]
+				dst = a[1]
 			}
-			tag, repo, ok, err := parse(target)
-			if err != nil {
-				return usageError{err}
-			}
-			if repo.RegistryStr() == "localhost" {
-				return usagef("%s has no registry; give a destination, e.g. aic push %s registry.example.com/%s",
-					repo.Name(), src, strings.TrimPrefix(repo.RepositoryStr(), "localhost/"))
-			}
-			st, err := openStore()
-			if err != nil {
-				return err
-			}
-			img, err := st.Image(src)
-			if err != nil {
-				return err
-			}
-			digest, err := img.Digest()
-			if err != nil {
-				return err
-			}
-			if !ok {
-				tag = store.DigestTag(repo, digest) // never "latest"
-			}
-			if !quiet {
-				fmt.Fprintf(cmd.ErrOrStderr(), "Pushing %s to %s...\n", src, builder.DisplayName(tag))
-			}
-			d, err := st.Push(cmd.Context(), digest.String(), tag)
+			_, d, err := c.Push(cmd.Context(), a[0], dst)
 			if err != nil {
 				return err
 			}
@@ -430,11 +270,8 @@ func newVersionCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			dir, _ := store.DefaultDir()
 			fmt.Fprintf(cmd.OutOrStdout(), "aic %s\ndefault platform: %s\nimage store: %s\n",
-				version(), platformString(builder.DefaultPlatform()), dir)
+				version(), aic.PlatformString(builder.DefaultPlatform()), dir)
 			return nil
 		},
 	}
 }
-
-// showPullProgress makes st report the layers it pulls to w.
-func showPullProgress(st *store.Store, w io.Writer) { st.Progress = w }

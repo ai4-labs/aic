@@ -23,12 +23,12 @@ type pullProgress struct {
 // fetchLayers downloads img's missing layers into the store, a few at a
 // time, reporting each one. Layers from a registry are verified against
 // their digest as they are read.
-func (s *Store) fetchLayers(ctx context.Context, img v1.Image) error {
+func (s *Store) fetchLayers(ctx context.Context, img v1.Image, progress io.Writer) error {
 	layers, err := img.Layers()
 	if err != nil {
 		return err
 	}
-	p := &pullProgress{w: s.Progress}
+	p := &pullProgress{w: progress}
 	if p.w == nil {
 		p.w = io.Discard
 	}
