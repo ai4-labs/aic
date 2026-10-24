@@ -1,241 +1,75 @@
 # aic
 
-A container format and runtime for AI developers, native on **macOS** and **Linux**.
-
-- **Language-agnostic.** The runtime mounts content-addressed trees and runs a command.
-  Python, Node, Go, Rust, or anything else comes from pluggable **toolchains**.
-- **Reproducible.** Runtimes and dependencies are pinned by digest in `aic.lock`.
-- **Sandboxed by default.** The operator supplies the config at run time; without one, everything is denied.
-  An app can't grant itself permissions.
-- **Native, no VM.** Linux uses rootless namespaces, cgroups v2, seccomp, and Landlock.
-  macOS runs native binaries under Seatbelt.
-
-> [!NOTE]
-> **Status: early development (macOS preview).**
->
-> **Works today**
-> - `aic run` on macOS: runs a project folder in a deny-by-default Seatbelt sandbox, with
->   `--workspace` and `--config` write grants. Try [`examples/`](examples) or `./demo.sh`.
-> - `aic build` keeps `aic.lock` up to date (`--locked` for CI).
-> - `aic init` and `aic version`.
->
-> **Not yet**
-> - Bundles: `aic build` stops after locking, so `aic run` runs the project folder directly (M1).
-> - Linux sandbox (M3), toolchains such as `python` and `node` (M4), network egress (M5),
->   and memory/process limits. A project or config that needs these is refused, not run with less.
->
-> Examples further down that use toolchains or egress show the **planned** interface from
-> [`spec/format.md`](spec/format.md).
-
-## Concepts
-
-```
- aic.yaml ──lock/build──▶  App bundle  ──┐
-                                         ├──▶  aic run  ──▶  sandboxed process
-                    config.json  ────────┘   (operator-owned, never inside the bundle)
-```
-
-| | What | Who owns it |
-|---|---|---|
-| **App** | code, data, and per-platform toolchains | developer |
-| **Config** | network, filesystem, limits | whoever *runs* the app |
-
-Inside the container:
-
-| Path | Contents |
-|---|---|
-| `$AIC_ROOT/<mount>` | app components (read-only) |
-| `$AIC_ROOT/workspace` | host dir from `--workspace` (writable only if the config allows) |
-| `$AIC_ROOT/scratch` | per-run writable scratch |
-
-## Examples
-
-### 1. Python: a batch job
-
-```yaml
-# aic.yaml
-schemaVersion: 1
-name: "report"
-version: "0.1.0"
-
-toolchains:
-  python:
-    version: "3.12"
-    requirements: requirements.txt   # pandas, numpy, …
-
-targets:
-  - darwin-arm64
-  - linux-amd64
-
-include: ["src/**"]
-
-entrypoint:
-  cmd: [python, -m, src.report]
-```
+A podman-like container image builder. `aic` builds OCI images from a
+**Dockerfile** and pushes/pulls them to and from any OCI registry.
 
 ```sh
-aic build              # creates or refreshes aic.lock when aic.yaml changes
-aic build --locked     # in CI: fail instead if aic.lock is missing or stale
-
-# No --config means deny-all: no network, nothing writable outside scratch.
-aic run --workspace ./data report
+aic build -t hello examples/hello        # build ./examples/hello/Dockerfile
+aic push hello registry.example.com/team/hello:1
+aic pull registry.example.com/team/hello:1
 ```
 
-Where results may be written is the operator's decision, made at run time:
+## How it works
 
-```jsonc
-// report-config.json
-{ "filesystem": { "writable": ["$WORKSPACE/out"] } }
+- **Native image assembly.** Base images, `COPY`/`ADD` layers and all metadata
+  instructions (`ENV`, `LABEL`, `WORKDIR`, `USER`, `CMD`, ...) are handled by aic
+  itself, with [go-containerregistry](https://github.com/google/go-containerregistry).
+  A Dockerfile without `RUN` needs no container runtime at all.
+- **`RUN` uses podman.** For each `RUN`, aic loads the image so far into podman,
+  runs the command, exports the container filesystem and diffs it against the
+  image to produce the new layer. On macOS this runs in the podman machine VM.
+- **Local store.** Images live in an OCI image layout at
+  `~/.local/share/aic/store` (override with `$AIC_STORE`).
+- **Registry auth** comes from `~/.docker/config.json`, podman's
+  `containers/auth.json`, `$REGISTRY_AUTH_FILE`, and credential helpers.
+  Log in with `podman login` or `docker login`.
+
+## Commands
+
 ```
+aic build [flags] [CONTEXT]      build CONTEXT/Dockerfile (default context: .)
+  -t, --tag NAME                 name the image (repeatable); unqualified names go under localhost/
+  -f, --file PATH                Dockerfile path
+  --build-arg KEY[=VALUE]        set a build argument (repeatable)
+  --target STAGE                 build up to this stage
+  --platform OS/ARCH[/VARIANT]   target platform (default linux/<host arch>)
+  --pull                         always pull base images
+  -q, --quiet                    print only the image digest
 
-```sh
-aic run --config report-config.json --workspace ./data report
-```
-
-### 2. TypeScript: an agent that may only reach one API
-
-```yaml
-# aic.yaml
-schemaVersion: 1
-name: "support-agent"
-version: "1.2.0"
-
-toolchains:
-  node:
-    version: "22"
-    lockfile: package-lock.json
-
-targets:
-  - darwin-arm64
-  - linux-amd64
-  - linux-arm64
-
-include: ["dist/**"]
-
-entrypoint:
-  cmd: [node, dist/agent.js]
-```
-
-```jsonc
-// config.json: owned by whoever deploys the agent
-{
-  "network":    { "egress": ["api.openai.com:443"] },
-  "filesystem": { "writable": ["$WORKSPACE/out"] },
-  "maxMemory":  2147483648,
-  "maxProcs":   32
-}
-```
-
-```sh
-aic run --config config.json --workspace ./tickets support-agent
-# Any connection other than api.openai.com:443 is refused by the egress proxy.
-# Writes anywhere except ./tickets/out and the per-run scratch dir fail with EPERM.
-```
-
-### 3. Go / Rust / C++: prebuilt binaries
-
-Compiled languages need no special support. Build the binaries as usual, then ship one per platform:
-
-```yaml
-# aic.yaml
-schemaVersion: 1
-name: "ingest"
-version: "0.4.0"
-
-toolchains:
-  prebuilt:
-    darwin-arm64: dist/darwin-arm64      # contains bin/ingest
-    linux-amd64:
-      url: https://example.com/ingest-linux-amd64.tar.gz
-      digest: sha256:9f2c…               # verified before use
-
-targets:
-  - darwin-arm64
-  - linux-amd64
-
-entrypoint:
-  cmd: [ingest, --in, workspace/raw, --out, workspace/clean]
-```
-
-```jsonc
-// ingest-config.json
-{ "filesystem": { "writable": ["$WORKSPACE/clean"] }, "maxProcs": 16 }
-```
-
-```sh
-aic run --config ingest-config.json --workspace ./data ingest
-```
-
-### 4. Running code an AI agent just wrote
-
-Use `aic` as a disposable sandbox for untrusted, generated code. The app can be
-nothing more than a toolchain with no code of its own:
-
-```yaml
-# aic.yaml
-schemaVersion: 1
-name: "py-sandbox"
-version: "1"
-toolchains:
-  python:
-    version: "3.12"
-    requirements: sandbox-requirements.txt   # numpy, pandas, matplotlib
-targets:
-  - darwin-arm64
-  - linux-amd64
-entrypoint:
-  cmd: [python]
-```
-
-```sh
-# The agent writes ./job/solution.py and calls:
-aic run --workspace ./job py-sandbox -- python workspace/solution.py
-# Deny-all config: no network, cannot read ~/.ssh or anything else on the host,
-# cannot write ./job (not granted), and dies when it hits default limits.
-
-# Interactive debugging under the same restrictions:
-aic shell --workspace ./job py-sandbox
-```
-
-### 5. Any other language: write a toolchain provider
-
-A toolchain provider is an executable named `aic-toolchain-<name>` on `PATH`. It speaks a small
-JSON protocol ([spec §8.1](spec/format.md#81-toolchains)). It pins inputs at
-`lock` time and writes files at `materialize` time, and it tells the runtime which
-`PATH` and environment variables its output needs:
-
-```yaml
-toolchains:
-  julia:                 # runs aic-toolchain-julia
-    version: "1.11"
-    project: Project.toml
-```
-
-```json
-{"components": [
-  {"kind": "runtime", "name": "julia", "mount": "runtime/julia",
-   "path": ["bin"], "env": {"JULIA_DEPOT_PATH": "${AIC_MOUNT}/depot"}}
-]}
-```
-
-The runtime never learns what "Julia" is. It mounts the tree, prepends `bin` to
-`PATH`, and sets `JULIA_DEPOT_PATH`.
-
-## Getting started
-
-```sh
+aic pull [--platform OS/ARCH] IMAGE
+aic push IMAGE [DESTINATION]     IMAGE may be a name or a digest (prefix)
 aic version
-aic init myproject      # writes myproject/aic.yaml
 ```
 
-## Roadmap
+Flags may come before or after positional arguments. Shell completion:
+`aic completion bash|zsh|fish|powershell`.
 
-| # | Milestone |
+## Dockerfile support
+
+| | |
 |---|---|
-| M0 | Spec + skeleton ✅ |
-| M1 | Content-addressed store, `build` / `inspect` / `gc` |
-| M2 | macOS Seatbelt sandbox: `run` ✅ (project dirs, deny-all + writable grants), `shell`, limits |
-| M3 | Linux namespace sandbox, `run` / `shell` |
-| M4 | Toolchains: `python`, `node`, `prebuilt` + external provider protocol, resolved into `aic.lock` |
-| M5 | Egress allowlist proxy |
-| M6 | `push` / `pull`, signing |
+| Instructions | `FROM` (incl. `--platform`, `AS`, `scratch`), `RUN`, `COPY`, `ADD`, `ARG`, `ENV`, `LABEL`, `WORKDIR`, `USER`, `EXPOSE`, `VOLUME`, `CMD`, `ENTRYPOINT`, `SHELL`, `STOPSIGNAL`, `HEALTHCHECK`, `ONBUILD`, `MAINTAINER` |
+| Syntax | parser directives (`escape`), line continuations, exec and shell forms, heredocs (`RUN <<EOF`, `COPY <<EOF`), `$VAR` / `${VAR:-x}` / `${VAR:+x}` / `${VAR:?x}` |
+| Multi-stage | `COPY --from=<stage, index or image>`; stages the target doesn't need are skipped |
+| `COPY`/`ADD` | globs, `.dockerignore` (and `Dockerfile.dockerignore`), `--chown` (ids or names from the image), `--chmod`, `--link` (accepted) |
+| `ADD` | local tar archives are extracted (plain, gzip, bzip2, zstd); `http(s)` URLs with optional `--checksum=sha256:...` |
+| `RUN` | `--network=default\|none\|host` |
+| Build args | `TARGETPLATFORM`, `TARGETOS`, `TARGETARCH`, `BUILDPLATFORM`, ... are predefined |
+
+Not supported yet: `RUN --mount` (cache, secrets, ssh), git sources for `ADD`,
+xz archives, `COPY --parents`/`--exclude`, and executing `ONBUILD` triggers of a
+base image (aic warns and skips them).
+
+## Requirements
+
+- Go 1.25+ to build: `go build -o aic ./cmd/aic`
+- For Dockerfiles with `RUN`: [podman](https://podman.io). On macOS,
+  `podman machine init && podman machine start`.
+
+## Limitations
+
+- No build cache yet: every build runs every step.
+- Each `RUN` streams the full image so far into podman, so builds on large base
+  images with many `RUN` steps are slow.
+- No `images`/`rmi`/`tag` commands or garbage collection of the store yet.
+- On Linux, `RUN` also goes through podman. A native rootless executor is planned.

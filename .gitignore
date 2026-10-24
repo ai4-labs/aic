@@ -2,5 +2,4 @@
 *.test
 *.out
 .DS_Store
-examples/csv-report/data/out/
-examples/**/aic.lock
+.e2e-store/

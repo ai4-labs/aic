@@ -1,4 +1,5 @@
-// Command aic is the CLI for the aic AI container format and runtime.
+// Command aic builds container images from Dockerfiles and moves them
+// to and from registries.
 package main
 
 import (
