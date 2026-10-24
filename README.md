@@ -42,6 +42,7 @@ aic login [-u USER] [--password-stdin] REGISTRY   log in (credentials are verifi
 aic logout [-a] [REGISTRY]       remove credentials saved by aic login
 aic images [-q] [--no-trunc]     list local images
 aic prune                        remove the build cache
+aic tag IMAGE TARGET...          add names to a local image
 aic rmi [-f] [-a] IMAGE...       remove images (a name untags; an ID removes all its names)
 aic vm start|stop|status|logs|rm   manage the macOS build VM (see below)
 aic pull [--platform OS/ARCH] IMAGE
@@ -115,4 +116,3 @@ or an AppArmor profile for aic.
   how large an image can be built (on macOS, the VM's memory).
 - The macOS VM is arm64 only (Apple silicon), and `RUN` uses the host's
   architecture: no emulation for other `--platform`s yet.
-- No `tag` command yet.

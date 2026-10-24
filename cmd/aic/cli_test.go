@@ -274,3 +274,51 @@ func TestCLITagging(t *testing.T) {
 		t.Errorf("ambiguous push: %d %s", code, stderr)
 	}
 }
+
+func TestCLITag(t *testing.T) {
+	t.Setenv("AIC_STORE", t.TempDir())
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte("FROM scratch\nCOPY Dockerfile /\n"), 0o644)
+	code, stdout, stderr := runCLI(t, "build", "-q", "-t", "app:1", dir)
+	if code != exitOK {
+		t.Fatalf("build: %s", stderr)
+	}
+	hex := strings.TrimPrefix(strings.TrimSpace(stdout), "sha256:")
+
+	if code, stdout, stderr = runCLI(t, "tag", "app:1", "app:2", "registry.example.com/team/app:2", "other"); code != exitOK || stdout != "" {
+		t.Fatalf("tag: %d %q %s", code, stdout, stderr)
+	}
+	_, stdout, _ = runCLI(t, "images")
+	rows := map[string]bool{}
+	for _, line := range strings.Split(stdout, "\n") {
+		if f := strings.Fields(line); len(f) >= 2 {
+			rows[f[0]+":"+f[1]] = true
+		}
+	}
+	for _, want := range []string{"localhost/app:1", "localhost/app:2", "registry.example.com/team/app:2", "localhost/other:sha256-" + hex} {
+		if !rows[want] {
+			t.Errorf("images missing %s:\n%s", want, stdout)
+		}
+	}
+	if _, stdout, _ = runCLI(t, "images", "-q"); strings.TrimSpace(stdout) != hex[:12] {
+		t.Errorf("tagging created another image: %q", stdout)
+	}
+	// By ID works too.
+	if code, _, stderr = runCLI(t, "tag", hex[:12], "app:3"); code != exitOK {
+		t.Errorf("tag by ID: %s", stderr)
+	}
+	for _, tc := range []struct {
+		args []string
+		code int
+		want string
+	}{
+		{[]string{"tag", "app:1"}, exitUsage, "requires at least 2 arg"},
+		{[]string{"tag", "app:1", "app:latest"}, exitUsage, `"latest"`},
+		{[]string{"tag", "app:1", "app@sha256:" + hex}, exitUsage, "digest can't be used as a tag"},
+		{[]string{"tag", "nope:1", "app:9"}, exitError, "image not known"},
+	} {
+		if code, _, stderr := runCLI(t, tc.args...); code != tc.code || !strings.Contains(stderr, tc.want) {
+			t.Errorf("aic %q = %d %s; want %d %q", tc.args, code, stderr, tc.code, tc.want)
+		}
+	}
+}

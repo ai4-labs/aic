@@ -205,3 +205,53 @@ layers no image uses. The next build runs every step again.`,
 		},
 	}
 }
+
+func newTagCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "tag IMAGE TARGET...",
+		Short: "Add names to a local image",
+		Long: `Add names to a local image.
+
+IMAGE is a name, digest or ID. Each TARGET is a name like "app:1.2" or
+"ghcr.io/org/app:1.2"; unqualified names go under localhost/. A TARGET
+without a tag is tagged sha256-<image digest>; "latest" is not allowed.
+A name that already points at another image is moved.`,
+		Example: "  aic tag hello hello:1.0\n  aic tag 1c8cd8f6ca12 ghcr.io/org/hello:1.0",
+		Args:    args(cobra.MinimumNArgs(2)),
+		RunE: func(cmd *cobra.Command, a []string) error {
+			var tags []name.Tag
+			var repos []name.Repository
+			for _, t := range a[1:] {
+				tag, repo, ok, err := store.ParseTag(t)
+				if err != nil {
+					return usageError{err}
+				}
+				if ok {
+					tags = append(tags, tag)
+				} else {
+					repos = append(repos, repo)
+				}
+			}
+			st, err := openStore()
+			if err != nil {
+				return err
+			}
+			img, err := st.Image(a[0])
+			if err != nil {
+				return err
+			}
+			d, err := img.Digest()
+			if err != nil {
+				return err
+			}
+			var refs []name.Reference
+			for _, t := range tags {
+				refs = append(refs, t)
+			}
+			for _, r := range repos {
+				refs = append(refs, store.DigestTag(r, d))
+			}
+			return st.Put(img, refs...)
+		},
+	}
+}
