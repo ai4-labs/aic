@@ -53,10 +53,9 @@ aic login -i [REGISTRY]          guided login: pick a registry, get help creatin
 aic login [-u USER] [--password-stdin] REGISTRY   log in (credentials are verified first)
 aic logout [-a] [REGISTRY]       remove credentials saved by aic login
 aic images [-q] [--no-trunc]     list local images
-aic prune                        remove the build cache
+aic prune [--vm]                 remove the build cache (and the VM's cached files)
 aic tag IMAGE TARGET...          add names to a local image
 aic rmi [-f] [-a] IMAGE...       remove images (a name untags; an ID removes all its names)
-aic vm start|stop|status|logs|rm   manage the macOS build VM (see below)
 aic pull [--platform OS/ARCH] IMAGE
 aic push IMAGE [DESTINATION]     IMAGE may be a name or a digest (prefix)
 aic version
@@ -130,21 +129,15 @@ Claude Code needs the network to reach the API (`--network=host`; on macOS
 that is the VM's network, not your Mac's localhost). Its settings and login
 are not kept between runs; pass the API key with `-e` each time.
 
-## The build VM (macOS)
+## The VM (macOS)
 
-```sh
-aic vm start [--cpus N] [--memory MiB]   # keep a VM running in the background
-aic vm status                            # state, PID, size, uptime, number of RUNs
-aic vm logs [-f]                         # the VM's console log
-aic vm stop
-aic vm rm [-f]                           # delete the cached kernel, initramfs and logs
-```
-
-The VM runs a [LinuxKit](https://github.com/linuxkit/linux) kernel, downloaded
-once (~16 MB, pinned and checksummed); the guest agent is embedded in aic.
-The background VM serves builds over a Unix socket (`aic.sock`, mode 0600) in
-the VM directory. RUNs from concurrent builds are queued. Interrupting a build
-doesn't affect the VM. On Linux there is no VM and `aic vm` reports so.
+On macOS, each `aic build` that has `RUN` steps, and each `aic run`, boots its
+own small Linux VM (about a second) and stops it when done, so concurrent
+builds and runs don't wait for each other. The VM runs a
+[LinuxKit](https://github.com/linuxkit/linux) kernel, downloaded once (~16 MB,
+pinned and checksummed); the guest agent is embedded in aic. If the VM fails,
+the error includes the end of its console log. `aic prune --vm` deletes the
+cached kernel and initramfs.
 
 ## Dockerfile support
 
@@ -171,7 +164,7 @@ the Xcode command line tools (cgo); tested on macOS 15.
 |---|---|
 | `AIC_STORE` | image store (default `~/.aic/store`) |
 | `AIC_AUTH_FILE` | credentials saved by `aic login` (default `~/.aic/auth.json`, mode 0600; secrets go to a Docker credential helper such as `docker-credential-osxkeychain` if one is installed when the file is created) |
-| `AIC_VM_DIR` | VM kernel, initramfs, logs and socket (default `~/.aic/vm`) |
+| `AIC_VM_DIR` | VM kernel, initramfs and guest (default `~/.aic/vm`) |
 | `AIC_VM_CPUS`, `AIC_VM_MEMORY` | VM size on macOS (default min(4, host CPUs) and 4096 MiB) |
 | `SOURCE_DATE_EPOCH` | image creation time |
 
@@ -187,7 +180,8 @@ or an AppArmor profile for aic.
 
 - Each `RUN` and `aic run` unpacks the full image (and workspace) into a
   tmpfs, so memory bounds how large they can be (on macOS, the VM's memory).
-- On macOS, `aic run` boots a VM per run (about a second) unless `aic vm
-  start` is running; the background VM runs one container at a time.
+- On macOS, every build and run copies the whole image into its VM, which
+  takes several seconds for large images (about 13 s for the Claude Code
+  example).
 - The macOS VM is arm64 only (Apple silicon), and `RUN` uses the host's
   architecture: no emulation for other `--platform`s yet.

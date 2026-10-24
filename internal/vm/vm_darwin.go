@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -95,7 +94,7 @@ func Start(ctx context.Context, o Options) (*Machine, error) {
 		return nil, err
 	}
 
-	m := &Machine{logPath: filepath.Join(o.Dir, "console.log"), cpus: cpus, memMiB: mem}
+	m := &Machine{cpus: cpus, memMiB: mem}
 	ok := false
 	var files []*os.File
 	defer func() {
@@ -112,9 +111,12 @@ func Start(ctx context.Context, o Options) (*Machine, error) {
 		return nil, err
 	}
 	files = append(files, devnull)
-	if m.console, err = os.Create(m.logPath); err != nil {
+	// Each VM has its own console log, shown in errors and removed when
+	// the VM stops.
+	if m.console, err = os.CreateTemp(o.Dir, "console-*.log"); err != nil {
 		return nil, err
 	}
+	m.logPath = m.console.Name()
 	files = append(files, m.console)
 	consoleAtt, err := vz.NewFileHandleSerialPortAttachment(devnull, m.console)
 	if err != nil {
@@ -197,9 +199,10 @@ func Start(ctx context.Context, o Options) (*Machine, error) {
 	}
 	if err != nil {
 		m.files = files
-		ok = true // stop closes the files
+		ok = true           // stop closes the files
+		tail := m.logTail() // before stop removes the log
 		m.stop()
-		return nil, fmt.Errorf("booting the build VM: %v%s", err, m.logTail())
+		return nil, fmt.Errorf("booting the build VM: %v%s", err, tail)
 	}
 	ok = true
 	m.files = files
@@ -231,7 +234,7 @@ func (m *Machine) logTail() string {
 	if len(b) > 2048 {
 		b = b[len(b)-2048:]
 	}
-	return "\nVM console (" + m.logPath + "):\n" + string(b)
+	return "\nVM console:\n" + string(b)
 }
 
 // Run executes spec in a fresh container in the VM. image is the
@@ -269,13 +272,6 @@ func (m *Machine) Run(ctx context.Context, spec proto.Spec, image io.Reader, rio
 	return res, err
 }
 
-// Closed reports whether the VM has stopped.
-func (m *Machine) Closed() bool { return m.closed.Load() }
-
-// CPUs and MemoryMiB report the VM's size.
-func (m *Machine) CPUs() uint        { return m.cpus }
-func (m *Machine) MemoryMiB() uint64 { return m.memMiB }
-
 func (m *Machine) channelErr(ctx context.Context, err error) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
@@ -297,6 +293,9 @@ func (m *Machine) stop() {
 		}
 		for _, f := range m.files {
 			f.Close()
+		}
+		if m.logPath != "" {
+			os.Remove(m.logPath)
 		}
 	})
 }

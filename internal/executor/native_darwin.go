@@ -10,8 +10,8 @@ import (
 	"github.com/ai4-labs/aic/internal/vm"
 )
 
-// Native runs RUN in aic's Linux VM: the one started with `aic vm start`
-// if it is running, otherwise a VM booted for this build.
+// Native runs RUN in a Linux VM booted for this build or run, and stopped
+// when it is closed.
 type Native struct {
 	opts Options
 	once sync.Once
@@ -25,10 +25,6 @@ func NewNative(o Options) (Executor, error) { return &Native{opts: o}, nil }
 
 func (n *Native) Run(ctx context.Context, spec Spec, rootfs io.Writer) error {
 	n.once.Do(func() {
-		if c, err := vm.NewClient(n.opts.Dir); err == nil {
-			n.run = c.Run
-			return
-		}
 		progress := n.opts.Progress
 		if progress == nil {
 			progress = io.Discard

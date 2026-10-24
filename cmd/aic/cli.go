@@ -93,7 +93,7 @@ func newRootCmd() *cobra.Command {
 		SilenceUsage:  true,
 	}
 	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error { return usageError{err} })
-	root.AddCommand(newBuildCmd(), newImagesCmd(), newLoginCmd(), newLogoutCmd(), newPruneCmd(), newPullCmd(), newPushCmd(), newRmiCmd(), newRunCmd(), newTagCmd(), newVMCmd(), newVersionCmd())
+	root.AddCommand(newBuildCmd(), newImagesCmd(), newLoginCmd(), newLogoutCmd(), newPruneCmd(), newPullCmd(), newPushCmd(), newRmiCmd(), newRunCmd(), newTagCmd(), newVersionCmd())
 	return root
 }
 

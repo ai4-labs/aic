@@ -45,5 +45,15 @@ func ensureInitrd(dir string, guest []byte) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return p, writeFileAtomic(p, b, 0o644)
+	if err := writeFileAtomic(p, b, 0o644); err != nil {
+		return "", err
+	}
+	// Initramfs files of other aic versions are rebuilt when needed.
+	old, _ := filepath.Glob(filepath.Join(dir, "initrd-*.cpio"))
+	for _, o := range old {
+		if o != p {
+			os.Remove(o)
+		}
+	}
+	return p, nil
 }

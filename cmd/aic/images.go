@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -185,11 +186,15 @@ is required. Layers no longer used by any image are deleted.`,
 }
 
 func newPruneCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "prune",
+	var vmFiles bool
+	cmd := &cobra.Command{
+		Use:   "prune [flags]",
 		Short: "Remove the build cache",
 		Long: `Remove the build cache: the recorded results of build steps, and the
-layers no image uses. The next build runs every step again.`,
+layers no image uses. The next build runs every step again.
+
+With --vm, also remove what the macOS VM caches (kernel, initramfs and
+guest); it is downloaded or rebuilt when next needed.`,
 		Args: args(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			st, err := openStore()
@@ -201,9 +206,21 @@ layers no image uses. The next build runs every step again.`,
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "Removed %d build cache entries\n", n)
+			if vmFiles {
+				dir, err := vmDir()
+				if err != nil {
+					return err
+				}
+				if err := os.RemoveAll(dir); err != nil {
+					return err
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "Removed %s\n", dir)
+			}
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&vmFiles, "vm", false, "also remove the VM's cached kernel, initramfs and guest")
+	return cmd
 }
 
 func newTagCmd() *cobra.Command {

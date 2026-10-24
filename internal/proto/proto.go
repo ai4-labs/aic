@@ -66,10 +66,6 @@ const (
 	FrameResize byte = 'W' // host -> guest: JSON Size
 	FrameDone   byte = 'Z' // host -> guest: host has the result; ends the run
 	FrameCancel byte = 'K' // host -> guest: kill the container; the result still follows
-
-	// Requests to aic's VM daemon on macOS, each on its own connection.
-	FrameStatus byte = 'Q' // client -> daemon (empty); daemon -> client: JSON status
-	FrameStop   byte = 'H' // client -> daemon: shut down; daemon -> client: ack
 )
 
 // MaxPayload bounds a frame's payload.
