@@ -161,6 +161,11 @@ func Build(ctx context.Context, opts Options) (v1.Image, error) {
 		images:   map[string]*stage{},
 	}
 	b.auto = autoArgs(opts.Platform)
+	defer func() {
+		if b.exec != nil {
+			b.exec.Close()
+		}
+	}()
 	img, err := b.build(ctx, df)
 	if err != nil {
 		return nil, err

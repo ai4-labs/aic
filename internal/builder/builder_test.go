@@ -282,7 +282,7 @@ type fakeExec struct {
 	specs []executor.Spec
 }
 
-func (f *fakeExec) Name() string { return "fake" }
+func (f *fakeExec) Close() error { return nil }
 
 func (f *fakeExec) Run(_ context.Context, spec executor.Spec, out io.Writer) error {
 	f.specs = append(f.specs, spec)

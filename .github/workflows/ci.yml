@@ -20,11 +20,14 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: stable
+      - name: allow unprivileged user namespaces
+        if: runner.os == 'Linux'
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       - name: gofmt
         run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
       - name: vet
-        run: go vet ./...
+        run: go vet ./... && GOOS=linux go vet ./...
       - name: test
         run: go test -race ./...
       - name: build
-        run: go build -o aic ./cmd/aic && ./aic version
+        run: make && ./aic version

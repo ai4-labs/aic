@@ -97,6 +97,22 @@ func openStore() (*store.Store, error) {
 	return s, nil
 }
 
+// executorOptions configures RUN. The VM files live next to the store;
+// $AIC_VM_CPUS and $AIC_VM_MEMORY (MiB) size the VM on macOS.
+func executorOptions(st *store.Store, progress io.Writer) executor.Options {
+	o := executor.Options{Dir: filepath.Join(filepath.Dir(st.Dir()), "vm"), Progress: progress}
+	if d := os.Getenv("AIC_VM_DIR"); d != "" {
+		o.Dir = d
+	}
+	if n, err := strconv.ParseUint(os.Getenv("AIC_VM_CPUS"), 10, 32); err == nil {
+		o.CPUs = uint(n)
+	}
+	if n, err := strconv.ParseUint(os.Getenv("AIC_VM_MEMORY"), 10, 64); err == nil {
+		o.MemoryMiB = n
+	}
+	return o
+}
+
 func parsePlatform(s string) (v1.Platform, error) {
 	if s == "" {
 		return builder.DefaultPlatform(), nil
@@ -137,8 +153,9 @@ func newBuildCmd() *cobra.Command {
 		Long: `Build an image from a Dockerfile.
 
 CONTEXT is the build context directory (default "."). The Dockerfile is
-CONTEXT/Dockerfile unless --file is given. RUN instructions are executed
-with podman; on macOS, in the podman machine VM.`,
+CONTEXT/Dockerfile unless --file is given. RUN instructions run in
+rootless Linux containers; on macOS, inside a small Linux VM that aic
+boots itself. RUN has no network access unless --network=host is given.`,
 		Example: `  aic build -t hello .
   aic build -f build/Dockerfile --build-arg VERSION=1.2 -t app:1.2 .
   aic build --target test --platform linux/amd64 .`,
@@ -225,7 +242,7 @@ func runBuild(cmd *cobra.Command, contextDir string, o buildOptions) error {
 		Created:    created,
 		Store:      st,
 		NewExecutor: func() (executor.Executor, error) {
-			return executor.NewPodman()
+			return executor.NewNative(executorOptions(st, progress))
 		},
 		Progress: progress,
 		Stdout:   runOut,

@@ -1,6 +1,6 @@
 # Build a static binary in one stage, ship it in a small image.
 FROM alpine:3.20 AS build
-RUN apk add --no-cache gcc musl-dev
+RUN --network=host apk add --no-cache gcc musl-dev
 COPY hello.c /src/
 RUN gcc -static -O2 -o /hello /src/hello.c
 
