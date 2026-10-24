@@ -15,8 +15,11 @@ RUN apk add --no-cache \
 ENV SHELL=/bin/bash USE_BUILTIN_RIPGREP=0
 
 ARG CLAUDE_CODE_VERSION=latest
-RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
- && npm cache clean --force
+# Keep npm quiet: no update notice, funding or audit messages; the
+# download cache is deleted instead of "npm cache clean --force".
+RUN npm install -g --no-update-notifier --no-fund --no-audit --loglevel=error \
+      @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
+ && rm -rf /root/.npm
 
 # Claude Code won't skip permission prompts as root.
 RUN adduser -D -s /bin/bash claude
