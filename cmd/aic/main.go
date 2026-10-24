@@ -5,7 +5,7 @@ package main
 import (
 	"os"
 
-	"github.com/rakyll/ai-container/internal/container"
+	"github.com/ai4-labs/aic/internal/container"
 )
 
 func main() {

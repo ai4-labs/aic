@@ -15,8 +15,8 @@ import (
 
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 
-	"github.com/rakyll/ai-container/internal/ignore"
-	"github.com/rakyll/ai-container/internal/rootfs"
+	"github.com/ai4-labs/aic/internal/ignore"
+	"github.com/ai4-labs/aic/internal/rootfs"
 )
 
 // copyItem is one entry to write in a COPY/ADD layer.

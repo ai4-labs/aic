@@ -2,6 +2,6 @@
 
 package main
 
-import "github.com/rakyll/ai-container/internal/proto"
+import "github.com/ai4-labs/aic/internal/proto"
 
 func watchResize(int) (<-chan proto.Size, func()) { return nil, func() {} }

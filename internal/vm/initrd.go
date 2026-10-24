@@ -7,7 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/rakyll/ai-container/internal/cpio"
+	"github.com/ai4-labs/aic/internal/cpio"
 )
 
 // BuildInitrd returns an initramfs whose /init is the guest binary.

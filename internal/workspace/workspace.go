@@ -21,7 +21,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/rakyll/ai-container/internal/rootfs"
+	"github.com/ai4-labs/aic/internal/rootfs"
 )
 
 // state identifies an entry's type, permissions and contents.

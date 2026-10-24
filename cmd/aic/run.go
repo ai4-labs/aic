@@ -16,11 +16,11 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
-	"github.com/rakyll/ai-container/internal/builder"
-	"github.com/rakyll/ai-container/internal/executor"
-	"github.com/rakyll/ai-container/internal/proto"
-	"github.com/rakyll/ai-container/internal/store"
-	"github.com/rakyll/ai-container/internal/workspace"
+	"github.com/ai4-labs/aic/internal/builder"
+	"github.com/ai4-labs/aic/internal/executor"
+	"github.com/ai4-labs/aic/internal/proto"
+	"github.com/ai4-labs/aic/internal/store"
+	"github.com/ai4-labs/aic/internal/workspace"
 )
 
 // Exit codes of aic run when the command itself didn't run.
@@ -196,6 +196,10 @@ func runRun(cmd *cobra.Command, imageName string, command []string, o runOptions
 	if o.interactive {
 		spec.Stdin = stdin
 	}
+	// Signing may re-execute aic, so do it before touching the terminal.
+	if err := ensureVMAccess(stderr); err != nil {
+		return err
+	}
 	if o.tty {
 		spec.TTY = true
 		sizeFd := outFd
@@ -220,7 +224,7 @@ func runRun(cmd *cobra.Command, imageName string, command []string, o runOptions
 	}
 
 	// The executor writes the container's copy of the workspace here.
-	var export io.Writer = io.Discard
+	var export io.Writer // nil: nothing comes back
 	var exportFile *os.File
 	if hostDir != "" {
 		exportFile, err = os.CreateTemp("", "aic-workspace-*.tar")

@@ -16,7 +16,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/name"
 	"golang.org/x/term"
 
-	"github.com/rakyll/ai-container/internal/auth"
+	"github.com/ai4-labs/aic/internal/auth"
 )
 
 // prompter asks questions on a terminal. Its parts are replaceable for

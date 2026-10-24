@@ -29,7 +29,7 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/rakyll/ai-container/internal/proto"
+	"github.com/ai4-labs/aic/internal/proto"
 )
 
 const childEnv = "_AIC_CONTAINER_INIT"

@@ -15,7 +15,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/rakyll/ai-container/internal/rootfs"
+	"github.com/ai4-labs/aic/internal/rootfs"
 )
 
 // Top-level paths that hold mounts, not image content.

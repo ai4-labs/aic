@@ -7,7 +7,7 @@ import (
 	"io"
 	"sync"
 
-	"github.com/rakyll/ai-container/internal/vm"
+	"github.com/ai4-labs/aic/internal/vm"
 )
 
 // Native runs RUN in aic's Linux VM: the one started with `aic vm start`

@@ -21,8 +21,8 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/rakyll/ai-container/internal/container"
-	"github.com/rakyll/ai-container/internal/proto"
+	"github.com/ai4-labs/aic/internal/container"
+	"github.com/ai4-labs/aic/internal/proto"
 )
 
 // Main runs the guest. It does not return.
@@ -127,8 +127,8 @@ func serve(r io.Reader, w io.Writer) error {
 		if err := json.Unmarshal(payload, &spec); err != nil {
 			return err
 		}
-		if err := proto.ServeRun(r, fw, spec, func(image io.Reader, rio proto.IO) proto.Result {
-			res, err := container.Run(context.Background(), spec, image, rio)
+		if err := proto.ServeRun(r, fw, spec, func(ctx context.Context, image io.Reader, rio proto.IO) proto.Result {
+			res, err := container.Run(ctx, spec, image, rio)
 			if err != nil {
 				res = proto.Result{Error: err.Error()}
 			}

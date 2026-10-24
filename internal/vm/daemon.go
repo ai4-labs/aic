@@ -13,7 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/rakyll/ai-container/internal/proto"
+	"github.com/ai4-labs/aic/internal/proto"
 )
 
 // The VM daemon keeps a build VM running between builds (`aic vm start`).
@@ -79,10 +79,10 @@ func (s *server) handle(conn net.Conn) {
 			return
 		}
 		s.runs.Add(1)
-		// A client that goes away mid-run must not take the shared VM
-		// down: the run completes and its output is discarded.
-		_ = proto.ServeRun(conn, fw, spec, func(image io.Reader, rio proto.IO) proto.Result {
-			res, err := s.r.Run(context.Background(), spec, image, rio)
+		// A client that goes away mid-run cancels its container, so an
+		// abandoned interactive run doesn't hold the VM forever.
+		_ = proto.ServeRun(conn, fw, spec, func(ctx context.Context, image io.Reader, rio proto.IO) proto.Result {
+			res, err := s.r.Run(ctx, spec, image, rio)
 			if err != nil {
 				res = proto.Result{Error: err.Error()}
 			}
@@ -204,9 +204,10 @@ func (c *Client) Run(ctx context.Context, spec proto.Spec, image io.Reader, rio 
 		return proto.Result{}, fmt.Errorf("connecting to the VM: %w", err)
 	}
 	defer conn.Close()
+	// Hanging up makes the daemon kill the container.
 	stop := context.AfterFunc(ctx, func() { conn.Close() })
 	defer stop()
-	res, err := proto.HostRun(conn, proto.NewWriter(conn), spec, image, rio)
+	res, err := proto.HostRun(context.Background(), conn, proto.NewWriter(conn), spec, image, rio)
 	if err != nil && ctx.Err() != nil {
 		return proto.Result{}, ctx.Err()
 	}

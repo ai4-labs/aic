@@ -17,10 +17,10 @@ import (
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/spf13/cobra"
 
-	"github.com/rakyll/ai-container/internal/auth"
-	"github.com/rakyll/ai-container/internal/builder"
-	"github.com/rakyll/ai-container/internal/executor"
-	"github.com/rakyll/ai-container/internal/store"
+	"github.com/ai4-labs/aic/internal/auth"
+	"github.com/ai4-labs/aic/internal/builder"
+	"github.com/ai4-labs/aic/internal/executor"
+	"github.com/ai4-labs/aic/internal/store"
 )
 
 // Exit codes.

@@ -22,8 +22,8 @@ import (
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 
-	"github.com/rakyll/ai-container/internal/proto"
-	"github.com/rakyll/ai-container/internal/rootfs"
+	"github.com/ai4-labs/aic/internal/proto"
+	"github.com/ai4-labs/aic/internal/rootfs"
 )
 
 // Spec describes one RUN.
@@ -65,7 +65,8 @@ type Workspace struct {
 // Executor runs commands in containers.
 type Executor interface {
 	// Run executes spec and writes the container's root filesystem, as
-	// an uncompressed tar stream, to rootfs.
+	// an uncompressed tar stream, to rootfs. If rootfs is nil, nothing
+	// is sent back.
 	Run(ctx context.Context, spec Spec, rootfs io.Writer) error
 	// Close releases resources such as a VM.
 	Close() error
@@ -105,6 +106,9 @@ func run(ctx context.Context, fn runFunc, spec Spec, rootfs io.Writer) error {
 		Stdout: spec.Stdout,
 		Stderr: spec.Stderr,
 		Export: rootfs,
+	}
+	if rootfs == nil {
+		ps.NoExport, rio.Export = true, io.Discard
 	}
 	if rio.Stdout == nil {
 		rio.Stdout = io.Discard

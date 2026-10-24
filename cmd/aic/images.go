@@ -11,7 +11,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/spf13/cobra"
 
-	"github.com/rakyll/ai-container/internal/store"
+	"github.com/ai4-labs/aic/internal/store"
 )
 
 func newImagesCmd() *cobra.Command {

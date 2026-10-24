@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/rakyll/ai-container/internal/container"
-	"github.com/rakyll/ai-container/internal/guest"
+	"github.com/ai4-labs/aic/internal/container"
+	"github.com/ai4-labs/aic/internal/guest"
 )
 
 func main() {

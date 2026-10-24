@@ -7,7 +7,7 @@ import (
 	"errors"
 	"io"
 
-	"github.com/rakyll/ai-container/internal/proto"
+	"github.com/ai4-labs/aic/internal/proto"
 )
 
 // Init is a no-op outside of Linux.

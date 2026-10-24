@@ -9,14 +9,15 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
-	"github.com/rakyll/ai-container/internal/proto"
+	"github.com/ai4-labs/aic/internal/proto"
 )
 
 // fakeMachine echoes the image back as the export.
 type fakeMachine struct{ closed bool }
 
-func (f *fakeMachine) Run(_ context.Context, spec proto.Spec, image io.Reader, rio proto.IO) (proto.Result, error) {
+func (f *fakeMachine) Run(ctx context.Context, spec proto.Spec, image io.Reader, rio proto.IO) (proto.Result, error) {
 	b, err := io.ReadAll(image)
 	if err != nil {
 		return proto.Result{}, err
@@ -28,6 +29,9 @@ func (f *fakeMachine) Run(_ context.Context, spec proto.Spec, image io.Reader, r
 	case "die":
 		f.closed = true
 		return proto.Result{}, errors.New("VM crashed")
+	case "block":
+		<-ctx.Done() // an interactive session nobody is attached to
+		return proto.Result{}, ctx.Err()
 	case "cat":
 		// Report the first resize, then echo stdin.
 		size := <-rio.Resize
@@ -152,4 +156,36 @@ func TestDaemonStopsWhenVMDies(t *testing.T) {
 		t.Errorf("run = %+v, %v", res, err)
 	}
 	<-done
+}
+
+// A client that goes away (Ctrl-C, closed terminal) must not leave its
+// container holding the VM.
+func TestDaemonCancelsAbandonedRun(t *testing.T) {
+	dir, _, _ := startFake(t)
+	c, err := NewClient(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	stdinR, stdinW := io.Pipe()
+	defer stdinW.Close()
+	if _, err := c.Run(ctx, proto.Spec{Args: []string{"block"}, Stdin: true, TTY: true}, strings.NewReader("x"),
+		proto.IO{Stdin: stdinR, Stdout: io.Discard, Stderr: io.Discard, Export: io.Discard}); err == nil {
+		t.Fatal("cancelled run succeeded")
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.Run(context.Background(), proto.Spec{Args: []string{"echo"}}, strings.NewReader("x"),
+			proto.IO{Stdout: io.Discard, Stderr: io.Discard, Export: io.Discard})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the next run is stuck behind the abandoned one")
+	}
 }

@@ -13,12 +13,12 @@ aic pull registry.example.com/team/hello:sha256-1c8cd8f6ca12a298bd0a6834318e6915
 ## Install
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/ai4-labs/aic/main/install.sh | sh
+go install github.com/ai4-labs/aic/cmd/aic@latest
 ```
 
-This installs the latest release for macOS (Apple silicon) or Linux (amd64,
-arm64) to `~/.local/bin`, after checking its SHA-256. Set `AIC_VERSION=v0.1.0`
-for a specific release or `AIC_INSTALL_DIR` for another directory.
+Requires Go 1.26+ and, on macOS, the Xcode command line tools. On macOS, the
+first build or run signs aic for Virtualization.framework and compiles the
+VM's Linux guest from the same source, once.
 
 ## How it works
 
@@ -163,8 +163,9 @@ make install    # installs it to $(go env GOPATH)/bin (override with BINDIR=...)
 
 On macOS, `make` cross-compiles the Linux guest (`cmd/aic-guest`), embeds it,
 and signs `aic` with the `com.apple.security.virtualization` entitlement
-(ad hoc). A plain `go build` works for everything except `RUN`. Requires Go 1.25+
-and, on macOS, the Xcode command line tools (cgo); tested on macOS 15.
+(ad hoc). A plain `go build` from a checkout works for everything except
+`RUN` and `aic run`; use `make` for those. Requires Go 1.26+ and, on macOS,
+the Xcode command line tools (cgo); tested on macOS 15.
 
 | Variable | |
 |---|---|

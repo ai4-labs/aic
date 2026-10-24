@@ -10,7 +10,7 @@ import (
 
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 
-	"github.com/rakyll/ai-container/internal/store"
+	"github.com/ai4-labs/aic/internal/store"
 )
 
 // Build cache.

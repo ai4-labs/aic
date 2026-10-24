@@ -21,8 +21,8 @@ import (
 
 	"github.com/klauspost/compress/zstd"
 
-	"github.com/rakyll/ai-container/internal/dockerfile"
-	"github.com/rakyll/ai-container/internal/rootfs"
+	"github.com/ai4-labs/aic/internal/dockerfile"
+	"github.com/ai4-labs/aic/internal/rootfs"
 )
 
 type copyFlags struct {

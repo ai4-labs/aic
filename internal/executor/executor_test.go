@@ -14,7 +14,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
 
-	"github.com/rakyll/ai-container/internal/proto"
+	"github.com/ai4-labs/aic/internal/proto"
 )
 
 func layer(t *testing.T, names ...string) *bytes.Buffer {

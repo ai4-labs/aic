@@ -13,7 +13,7 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
-	"github.com/rakyll/ai-container/internal/auth"
+	"github.com/ai4-labs/aic/internal/auth"
 )
 
 func registryName(reg name.Registry) string {

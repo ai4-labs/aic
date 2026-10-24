@@ -1,6 +1,7 @@
 package proto
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -70,8 +71,9 @@ func (f writerFunc) Write(p []byte) (int, error) { return f(p) }
 // image, then stdin and terminal resizes while dispatching output frames,
 // until the result arrives; then it ends the run with FrameDone. It is
 // the host side of the protocol, used both against the guest's serial
-// port and against the VM daemon's socket.
-func HostRun(r io.Reader, fw *Writer, spec Spec, image io.Reader, rio IO) (Result, error) {
+// port and against the VM daemon's socket. Cancelling ctx asks the other
+// side to kill the container; HostRun still waits for the result.
+func HostRun(ctx context.Context, r io.Reader, fw *Writer, spec Spec, image io.Reader, rio IO) (Result, error) {
 	b, err := json.Marshal(spec)
 	if err != nil {
 		return Result{}, err
@@ -83,6 +85,13 @@ func HostRun(r io.Reader, fw *Writer, spec Spec, image io.Reader, rio IO) (Resul
 	imageSent := make(chan error, 1)
 	finished := make(chan struct{})
 	defer close(finished)
+	go func() {
+		select {
+		case <-ctx.Done():
+			s.frame(FrameCancel, nil)
+		case <-finished:
+		}
+	}()
 	go func() {
 		buf := make([]byte, 256<<10)
 		_, err := io.CopyBuffer(s.stream(FrameImage), image, buf)
@@ -164,14 +173,34 @@ func HostRun(r io.Reader, fw *Writer, spec Spec, image io.Reader, rio IO) (Resul
 
 // ServeRun is the other side of HostRun: it reads a run's image, stdin
 // and resizes from r (after the spec frame) and calls run. Output goes
-// to fw. It returns once the host has sent FrameDone.
+// to fw. The context given to run is cancelled when the host cancels the
+// run or the channel fails. ServeRun returns once the host has sent
+// FrameDone, or the channel has failed and run has returned.
 func ServeRun(r io.Reader, fw *Writer, spec Spec,
-	run func(image io.Reader, rio IO) Result) error {
+	run func(ctx context.Context, image io.Reader, rio IO) Result) error {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	imgR, imgW := io.Pipe()
 	var stdinR *io.PipeReader
-	var stdinW *io.PipeWriter
+	var stdin chan []byte // queued so a slow reader doesn't block this loop
 	if spec.Stdin {
+		var stdinW *io.PipeWriter
 		stdinR, stdinW = io.Pipe()
+		stdin = make(chan []byte, 256)
+		go func() {
+			for p := range stdin {
+				if p == nil {
+					break // EOF
+				}
+				if _, err := stdinW.Write(p); err != nil {
+					break
+				}
+			}
+			stdinW.Close()
+			for range stdin { // drop the rest
+			}
+		}()
+		defer close(stdin)
 	}
 	resize := make(chan Size, 8)
 	rio := IO{
@@ -186,7 +215,7 @@ func ServeRun(r io.Reader, fw *Writer, spec Spec,
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		res := run(imgR, rio)
+		res := run(ctx, imgR, rio)
 		imgR.CloseWithError(errors.New("run finished"))
 		if stdinR != nil {
 			stdinR.CloseWithError(errors.New("run finished"))
@@ -196,26 +225,24 @@ func ServeRun(r io.Reader, fw *Writer, spec Spec,
 			fw.Frame(FrameResult, b)
 		}
 	}()
+	defer func() { <-done }()
 
 	// Read the image until its end marker, then stdin and resizes until
 	// the host says it is done. Data for a run that already ended is
 	// dropped.
-	defer func() {
-		if stdinW != nil {
-			stdinW.Close()
-		}
-		<-done
-	}()
 	var buf []byte
-	inImage := true
+	inImage, stdinEOF := true, false
 	for {
 		typ, p, err := ReadFrame(r, buf)
 		if err != nil {
+			cancel()
 			imgW.CloseWithError(err)
 			return err
 		}
 		buf = p[:0]
 		switch {
+		case typ == FrameCancel:
+			cancel()
 		case inImage && typ == FrameImage:
 			if len(p) == 0 {
 				imgW.Close()
@@ -224,14 +251,15 @@ func ServeRun(r io.Reader, fw *Writer, spec Spec,
 			}
 			_, _ = imgW.Write(p)
 		case !inImage && typ == FrameStdin:
-			if stdinW == nil {
+			if stdin == nil || stdinEOF {
 				continue
 			}
 			if len(p) == 0 {
-				stdinW.Close()
+				stdinEOF = true
+				stdin <- nil
 				continue
 			}
-			_, _ = stdinW.Write(p)
+			stdin <- append([]byte(nil), p...)
 		case !inImage && typ == FrameResize:
 			var size Size
 			if json.Unmarshal(p, &size) == nil {
@@ -244,6 +272,7 @@ func ServeRun(r io.Reader, fw *Writer, spec Spec,
 			return nil
 		default:
 			err := fmt.Errorf("%w %q", ErrUnexpectedFrame, typ)
+			cancel()
 			imgW.CloseWithError(err)
 			return err
 		}

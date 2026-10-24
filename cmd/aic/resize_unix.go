@@ -9,7 +9,7 @@ import (
 
 	"golang.org/x/term"
 
-	"github.com/rakyll/ai-container/internal/proto"
+	"github.com/ai4-labs/aic/internal/proto"
 )
 
 // watchResize reports the size of the terminal fd whenever it changes.

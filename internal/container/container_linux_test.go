@@ -20,7 +20,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/rakyll/ai-container/internal/proto"
+	"github.com/ai4-labs/aic/internal/proto"
 )
 
 // The test binary doubles as the container child (Init) and as the
@@ -46,6 +46,9 @@ func helper() int {
 		}
 		line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
 		fmt.Printf("size=%dx%d line=%s", ws.Col, ws.Row, line)
+		return 0
+	case "id":
+		fmt.Printf("uid=%d\n", os.Getuid())
 		return 0
 	case "ws":
 		wd, _ := os.Getwd()
@@ -291,5 +294,35 @@ func TestRunExportDir(t *testing.T) {
 	}
 	if len(files) != 2 || files["in"].body != "in" || files["out"].body != "out" {
 		t.Errorf("exported %v, want in and out (relative to /work), even though the command failed", files)
+	}
+}
+
+// A command that exits while its input is still open must end the run,
+// as a user other than root too.
+func TestRunStdinStaysOpen(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		tty  bool
+		user string
+	}{{"pipe", false, ""}, {"tty", true, ""}, {"pipe user", false, "1000:1000"}, {"tty user", true, "1000:1000"}} {
+		t.Run(tc.name, func(t *testing.T) {
+			pr, pw := io.Pipe()
+			defer pw.Close()
+			spec := proto.Spec{Args: []string{"helper"}, Env: []string{"AIC_TEST_HELPER=1", "MODE=id"}, Network: "none",
+				Stdin: true, TTY: tc.tty, User: tc.user, Size: proto.Size{Rows: 24, Cols: 80}}
+			done := make(chan string, 1)
+			go func() {
+				res, _, out := runSpec(t, spec, pr, testImage(t))
+				done <- fmt.Sprintf("%+v %q", res, out)
+			}()
+			select {
+			case got := <-done:
+				if !strings.Contains(got, "uid=") {
+					t.Errorf("run = %s", got)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("run did not end")
+			}
+		})
 	}
 }

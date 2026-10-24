@@ -6,7 +6,7 @@ import (
 	"context"
 	"io"
 
-	"github.com/rakyll/ai-container/internal/container"
+	"github.com/ai4-labs/aic/internal/container"
 )
 
 // Native runs RUN in rootless Linux namespaces on this host.

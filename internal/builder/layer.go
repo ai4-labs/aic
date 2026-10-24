@@ -17,8 +17,8 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
 
-	"github.com/rakyll/ai-container/internal/dockerfile"
-	"github.com/rakyll/ai-container/internal/rootfs"
+	"github.com/ai4-labs/aic/internal/dockerfile"
+	"github.com/ai4-labs/aic/internal/rootfs"
 )
 
 // layerWriter writes a layer tarball to a temporary file.

@@ -1,4 +1,4 @@
-module github.com/rakyll/ai-container
+module github.com/ai4-labs/aic
 
 go 1.26.0
 

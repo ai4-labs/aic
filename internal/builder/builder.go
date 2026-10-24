@@ -26,10 +26,10 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"github.com/google/go-containerregistry/pkg/v1/types"
 
-	"github.com/rakyll/ai-container/internal/dockerfile"
-	"github.com/rakyll/ai-container/internal/executor"
-	"github.com/rakyll/ai-container/internal/rootfs"
-	"github.com/rakyll/ai-container/internal/store"
+	"github.com/ai4-labs/aic/internal/dockerfile"
+	"github.com/ai4-labs/aic/internal/executor"
+	"github.com/ai4-labs/aic/internal/rootfs"
+	"github.com/ai4-labs/aic/internal/store"
 )
 
 // Options configures a build.

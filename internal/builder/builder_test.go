@@ -20,8 +20,8 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
 
-	"github.com/rakyll/ai-container/internal/executor"
-	"github.com/rakyll/ai-container/internal/store"
+	"github.com/ai4-labs/aic/internal/executor"
+	"github.com/ai4-labs/aic/internal/store"
 )
 
 // file is a flattened filesystem entry, for assertions.

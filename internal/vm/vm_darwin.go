@@ -17,7 +17,7 @@ import (
 
 	"github.com/Code-Hex/vz/v3"
 
-	"github.com/rakyll/ai-container/internal/proto"
+	"github.com/ai4-labs/aic/internal/proto"
 )
 
 // Options configures the VM.
@@ -58,7 +58,10 @@ func Start(ctx context.Context, o Options) (*Machine, error) {
 	if err := os.MkdirAll(o.Dir, 0o755); err != nil {
 		return nil, err
 	}
-	guest, err := guestBinary()
+	if err := EnsureSigned(o.Progress); err != nil {
+		return nil, err
+	}
+	guest, err := guestBinary(ctx, o.Dir, o.Progress)
 	if err != nil {
 		return nil, err
 	}
@@ -200,6 +203,16 @@ func Start(ctx context.Context, o Options) (*Machine, error) {
 	}
 	ok = true
 	m.files = files
+	// If the guest powers off (it does on a protocol error), fail the
+	// current run instead of waiting on a channel nobody serves.
+	go func() {
+		for st := range m.vm.StateChangedNotify() {
+			if st == vz.VirtualMachineStateStopped || st == vz.VirtualMachineStateError {
+				m.stop()
+				return
+			}
+		}
+	}()
 	return m, nil
 }
 
@@ -230,11 +243,23 @@ func (m *Machine) Run(ctx context.Context, spec proto.Spec, image io.Reader, rio
 	if m.closed.Load() {
 		return proto.Result{}, errors.New("build VM is stopped")
 	}
-	// A cancelled run leaves the channel mid-stream; stop the VM.
-	stopOnCancel := context.AfterFunc(ctx, func() { m.stop() })
+	// Cancelling ctx asks the guest to kill the container. If it doesn't
+	// answer, stop the VM: the channel can't be trusted anymore.
+	done := make(chan struct{})
+	defer close(done)
+	stopOnCancel := context.AfterFunc(ctx, func() {
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			m.stop()
+		}
+	})
 	defer stopOnCancel()
 
-	res, err := proto.HostRun(m.fromGuest, m.fw, spec, image, rio)
+	res, err := proto.HostRun(ctx, m.fromGuest, m.fw, spec, image, rio)
+	if err == nil && ctx.Err() != nil {
+		return proto.Result{}, ctx.Err()
+	}
 	var ce *proto.ChannelError
 	if errors.As(err, &ce) {
 		err = m.channelErr(ctx, ce.Err)

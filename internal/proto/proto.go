@@ -35,6 +35,8 @@ type Spec struct {
 	// Chown, if set, is a directory whose contents are given to the
 	// command's user before it runs.
 	Chown string `json:"chown,omitempty"`
+	// NoExport sends nothing back (aic run without a workspace).
+	NoExport bool `json:"noExport,omitempty"`
 }
 
 // Size is a terminal size.
@@ -63,6 +65,7 @@ const (
 	FrameStdin  byte = 'D' // host -> guest: stdin data; empty = EOF
 	FrameResize byte = 'W' // host -> guest: JSON Size
 	FrameDone   byte = 'Z' // host -> guest: host has the result; ends the run
+	FrameCancel byte = 'K' // host -> guest: kill the container; the result still follows
 
 	// Requests to aic's VM daemon on macOS, each on its own connection.
 	FrameStatus byte = 'Q' // client -> daemon (empty); daemon -> client: JSON status

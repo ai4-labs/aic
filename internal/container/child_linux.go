@@ -19,7 +19,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/rakyll/ai-container/internal/proto"
+	"github.com/ai4-labs/aic/internal/proto"
 )
 
 const defaultPath = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -85,7 +85,7 @@ func child() proto.Result {
 		}
 		return proto.Result{ExitCode: code}
 	}
-	if code != 0 {
+	if code != 0 || cfg.Spec.NoExport {
 		return proto.Result{ExitCode: code}
 	}
 	if err := exportTree(export, st, "/"); err != nil {

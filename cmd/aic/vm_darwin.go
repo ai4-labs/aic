@@ -18,7 +18,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/rakyll/ai-container/internal/vm"
+	"github.com/ai4-labs/aic/internal/vm"
 )
 
 func newVMCmd() *cobra.Command {
