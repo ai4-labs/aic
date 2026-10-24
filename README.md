@@ -10,6 +10,16 @@ aic push hello registry.example.com/team/hello
 aic pull registry.example.com/team/hello:sha256-1c8cd8f6ca12a298bd0a6834318e69157f00f146c1fffee15bb96edb70da1eb2
 ```
 
+## Install
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/ai4-labs/aic/main/install.sh | sh
+```
+
+This installs the latest release for macOS (Apple silicon) or Linux (amd64,
+arm64) to `~/.local/bin`, after checking its SHA-256. Set `AIC_VERSION=v0.1.0`
+for a specific release or `AIC_INSTALL_DIR` for another directory.
+
 ## How it works
 
 - aic assembles images itself. Pulling base images, `COPY`, `ADD` and metadata

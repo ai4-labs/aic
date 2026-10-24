@@ -1,0 +1,91 @@
+name: release
+
+# Push a tag like v0.1.0 to publish a release:
+#   git tag v0.1.0 && git push origin v0.1.0
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # so the binary is stamped with the tag's version
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: build
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+          GOARCH: ${{ matrix.arch }}
+        run: |
+          go build -trimpath -ldflags="-s -w" -o aic ./cmd/aic
+          tar -czf aic_linux_${{ matrix.arch }}.tar.gz aic
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aic_linux_${{ matrix.arch }}
+          path: aic_linux_${{ matrix.arch }}.tar.gz
+
+  darwin:
+    # Apple silicon runner: the build VM's guest is embedded for arm64 and
+    # aic is signed with the virtualization entitlement (ad hoc).
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: build
+        run: |
+          test "$(go env GOARCH)" = arm64
+          make
+          codesign --verify --verbose aic
+          codesign -d --entitlements - aic 2>&1 | grep -q com.apple.security.virtualization
+          ./aic version
+          tar -czf aic_darwin_arm64.tar.gz aic
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aic_darwin_arm64
+          path: aic_darwin_arm64.tar.gz
+
+  release:
+    needs: [linux, darwin]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: checksums
+        working-directory: dist
+        run: |
+          cp ../install.sh .
+          sha256sum aic_*.tar.gz > checksums.txt
+          cat checksums.txt
+      - name: smoke-test install.sh against the built assets
+        run: |
+          AIC_DOWNLOAD_URL="file://$PWD/dist" AIC_INSTALL_DIR="$RUNNER_TEMP/bin" sh install.sh
+          "$RUNNER_TEMP/bin/aic" version
+      - name: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            --verify-tag
