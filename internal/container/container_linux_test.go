@@ -6,6 +6,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"debug/elf"
 	"errors"
 	"fmt"
 	"io"
@@ -72,6 +73,14 @@ func testImage(t *testing.T) []byte {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The test binary runs inside a bare image, so it must be static.
+	if f, err := elf.NewFile(bytes.NewReader(self)); err == nil {
+		for _, p := range f.Progs {
+			if p.Type == elf.PT_INTERP {
+				t.Skip("the test binary is dynamically linked (e.g. -race); run with CGO_ENABLED=0")
+			}
+		}
+	}
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
 	add := func(h *tar.Header, body []byte) {
@@ -137,7 +146,6 @@ func TestRun(t *testing.T) {
 	if res.Error != "" || res.ExitCode != 0 {
 		t.Fatalf("result = %+v\noutput: %s", res, out)
 	}
-	t.Logf("container output:\n%s", out)
 	if !strings.Contains(out, "uid=0") || !strings.Contains(out, "interfaces up=1") {
 		t.Errorf("output = %q, want uid=0 and only loopback", out)
 	}
