@@ -1,8 +1,17 @@
 # aic
 
-A podman-like container tool. `aic` builds OCI images from a **Dockerfile**,
-runs them in isolated containers, and pushes/pulls them to and from any OCI
-registry. It is a single binary: no daemon, no podman or Docker, no root.
+Working with container images is harder than it should be, especially for AI
+developers: the tooling is complex and fragmented, and image formats don't
+compose well. aic is an experiment in doing it differently.
+
+Goals: aic builds OCI images from a **Dockerfile** (for now), runs them in isolated containers,
+and pushes and pulls them to and from any OCI registry. It is a single binary
+with no daemon. On Linux it is rootless and doesn't require a runtime such as runc; on
+macOS it uses Apple's built-in virtualization directly.
+
+> [!WARNING]
+> aic is experimental. It has known limitations (see below), which we expect
+> to address over time.
 
 ```sh
 aic build -t hello examples/hello
@@ -187,3 +196,7 @@ or an AppArmor profile for aic.
   Code example; `aic prune` removes these copies.
 - The macOS VM is arm64 only (Apple silicon), and `RUN` uses the host's
   architecture: no emulation for other `--platform`s yet.
+
+## License
+
+Apache License 2.0; see [LICENSE](LICENSE).
