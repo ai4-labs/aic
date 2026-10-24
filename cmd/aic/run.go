@@ -144,6 +144,7 @@ func runRun(cmd *cobra.Command, imageName string, command []string, o runOptions
 	if err != nil {
 		return err
 	}
+	showPullProgress(st, stderr)
 	img, err := runImage(cmd, st, imageName, plat)
 	if err != nil {
 		return err

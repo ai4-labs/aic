@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,6 +33,8 @@ type Store struct {
 	UserAgent string
 	// Keychain supplies registry credentials (default: Docker's config).
 	Keychain authn.Keychain
+	// Progress, if set, receives a line per layer when pulling.
+	Progress io.Writer
 }
 
 // DefaultDir returns $AIC_STORE, or ~/.aic/store.
@@ -277,6 +280,9 @@ func (s *Store) Pull(ctx context.Context, ref name.Reference, platform v1.Platfo
 	}
 	if cf.OS != platform.OS || cf.Architecture != platform.Architecture {
 		return nil, fmt.Errorf("%s: image is for %s/%s, not %s", ref, cf.OS, cf.Architecture, platform)
+	}
+	if err := s.fetchLayers(ctx, img); err != nil {
+		return nil, err
 	}
 	if err := s.Put(img, ref); err != nil {
 		return nil, err

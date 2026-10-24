@@ -268,6 +268,9 @@ func runBuild(cmd *cobra.Command, contextDir string, o buildOptions) error {
 		return err
 	}
 	progress, runOut := stderr, stdout
+	if !o.quiet {
+		showPullProgress(st, stderr)
+	}
 	if o.quiet {
 		progress, runOut = io.Discard, io.Discard
 	}
@@ -333,6 +336,7 @@ func newPullCmd() *cobra.Command {
 				return err
 			}
 			if !quiet {
+				showPullProgress(st, cmd.ErrOrStderr())
 				fmt.Fprintf(cmd.ErrOrStderr(), "Pulling %s (%s)...\n", builder.DisplayName(ref), platformString(plat))
 			}
 			img, err := st.Pull(cmd.Context(), ref, plat)
@@ -431,3 +435,6 @@ func newVersionCmd() *cobra.Command {
 		},
 	}
 }
+
+// showPullProgress makes st report the layers it pulls to w.
+func showPullProgress(st *store.Store, w io.Writer) { st.Progress = w }
