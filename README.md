@@ -26,10 +26,12 @@ aic pull registry.example.com/team/hello:1
     (about a second) and runs the same container code in it. The kernel is a
     [LinuxKit](https://github.com/linuxkit/linux) kernel, downloaded once (~16 MB,
     pinned and checksummed); the guest agent is embedded in aic.
+    By default each build boots its own VM and stops it at the end. `aic vm start`
+    keeps one running in the background instead, and builds use it.
 - **Network:** `RUN` is isolated (loopback only) unless you use
   `RUN --network=host`, which shares the host's network (the VM's NAT on macOS).
 - **Local store.** Images live in an OCI image layout at
-  `~/.local/share/aic/store` (override with `$AIC_STORE`).
+  `~/.aic/store` (override with `$AIC_STORE`).
 - **Registry auth** comes from `~/.docker/config.json`, podman's
   `containers/auth.json`, `$REGISTRY_AUTH_FILE`, and credential helpers.
   Log in with `docker login`, `podman login`, or write that file yourself.
@@ -48,6 +50,7 @@ aic build [flags] [CONTEXT]      build CONTEXT/Dockerfile (default context: .)
 
 aic images [-q] [--no-trunc]     list local images
 aic rmi [-f] [-a] IMAGE...       remove images (a name untags; an ID removes all its names)
+aic vm start|stop|status|logs|rm   manage the macOS build VM (see below)
 aic pull [--platform OS/ARCH] IMAGE
 aic push IMAGE [DESTINATION]     IMAGE may be a name or a digest (prefix)
 aic version
@@ -55,6 +58,20 @@ aic version
 
 Flags may come before or after positional arguments. Shell completion:
 `aic completion bash|zsh|fish|powershell`.
+
+## The build VM (macOS)
+
+```sh
+aic vm start [--cpus N] [--memory MiB]   # keep a VM running in the background
+aic vm status                            # state, PID, size, uptime, number of RUNs
+aic vm logs [-f]                         # the VM's console log
+aic vm stop
+aic vm rm [-f]                           # delete the cached kernel, initramfs and logs
+```
+
+The background VM serves builds over a Unix socket (`aic.sock`, mode 0600) in
+the VM directory. RUNs from concurrent builds are queued. Interrupting a build
+doesn't affect the VM. On Linux there is no VM and `aic vm` reports so.
 
 ## Dockerfile support
 
@@ -86,9 +103,9 @@ and, on macOS, the Xcode command line tools (cgo); tested on macOS 15.
 
 | Variable | |
 |---|---|
-| `AIC_STORE` | image store (default `~/.local/share/aic/store`) |
-| `AIC_VM_DIR` | VM kernel, initramfs and `console.log` (default `~/.local/share/aic/vm`) |
-| `AIC_VM_CPUS`, `AIC_VM_MEMORY` | VM size on macOS (default 4 CPUs, 4096 MiB) |
+| `AIC_STORE` | image store (default `~/.aic/store`) |
+| `AIC_VM_DIR` | VM kernel, initramfs, logs and socket (default `~/.aic/vm`) |
+| `AIC_VM_CPUS`, `AIC_VM_MEMORY` | VM size on macOS (default min(4, host CPUs) and 4096 MiB) |
 | `SOURCE_DATE_EPOCH` | image creation time |
 
 On Ubuntu 23.10 and later, AppArmor blocks unprivileged user namespaces by

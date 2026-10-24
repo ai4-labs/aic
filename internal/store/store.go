@@ -32,20 +32,16 @@ type Store struct {
 	UserAgent string
 }
 
-// DefaultDir returns $AIC_STORE, or $XDG_DATA_HOME/aic/store, or
-// ~/.local/share/aic/store.
+// DefaultDir returns $AIC_STORE, or ~/.aic/store.
 func DefaultDir() (string, error) {
 	if d := os.Getenv("AIC_STORE"); d != "" {
 		return d, nil
-	}
-	if d := os.Getenv("XDG_DATA_HOME"); d != "" {
-		return filepath.Join(d, "aic", "store"), nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".local", "share", "aic", "store"), nil
+	return filepath.Join(home, ".aic", "store"), nil
 }
 
 // Open opens the store at dir, creating it if needed.

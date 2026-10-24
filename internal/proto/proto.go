@@ -40,6 +40,10 @@ const (
 	FrameStderr byte = 'E' // guest -> host
 	FrameExport byte = 'X' // guest -> host: container rootfs tar; empty = EOF
 	FrameResult byte = 'R' // guest -> host: JSON Result, ends a run
+
+	// Requests to aic's VM daemon on macOS, each on its own connection.
+	FrameStatus byte = 'Q' // client -> daemon (empty); daemon -> client: JSON status
+	FrameStop   byte = 'H' // client -> daemon: shut down; daemon -> client: ack
 )
 
 // MaxPayload bounds a frame's payload.

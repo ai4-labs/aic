@@ -80,7 +80,7 @@ func newRootCmd() *cobra.Command {
 		SilenceUsage:  true,
 	}
 	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error { return usageError{err} })
-	root.AddCommand(newBuildCmd(), newImagesCmd(), newPullCmd(), newPushCmd(), newRmiCmd(), newVersionCmd())
+	root.AddCommand(newBuildCmd(), newImagesCmd(), newPullCmd(), newPushCmd(), newRmiCmd(), newVMCmd(), newVersionCmd())
 	return root
 }
 
@@ -97,20 +97,34 @@ func openStore() (*store.Store, error) {
 	return s, nil
 }
 
-// executorOptions configures RUN. The VM files live next to the store;
-// $AIC_VM_CPUS and $AIC_VM_MEMORY (MiB) size the VM on macOS.
-func executorOptions(st *store.Store, progress io.Writer) executor.Options {
-	o := executor.Options{Dir: filepath.Join(filepath.Dir(st.Dir()), "vm"), Progress: progress}
+// vmDir is where the macOS build VM keeps its files: $AIC_VM_DIR, or
+// "vm" next to the image store.
+func vmDir() (string, error) {
 	if d := os.Getenv("AIC_VM_DIR"); d != "" {
-		o.Dir = d
+		return d, nil
 	}
+	st, err := store.DefaultDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(filepath.Dir(st), "vm"), nil
+}
+
+// executorOptions configures RUN. $AIC_VM_CPUS and $AIC_VM_MEMORY (MiB)
+// size a VM booted for a build on macOS.
+func executorOptions(progress io.Writer) (executor.Options, error) {
+	dir, err := vmDir()
+	if err != nil {
+		return executor.Options{}, err
+	}
+	o := executor.Options{Dir: dir, Progress: progress}
 	if n, err := strconv.ParseUint(os.Getenv("AIC_VM_CPUS"), 10, 32); err == nil {
 		o.CPUs = uint(n)
 	}
 	if n, err := strconv.ParseUint(os.Getenv("AIC_VM_MEMORY"), 10, 64); err == nil {
 		o.MemoryMiB = n
 	}
-	return o
+	return o, nil
 }
 
 func parsePlatform(s string) (v1.Platform, error) {
@@ -242,7 +256,11 @@ func runBuild(cmd *cobra.Command, contextDir string, o buildOptions) error {
 		Created:    created,
 		Store:      st,
 		NewExecutor: func() (executor.Executor, error) {
-			return executor.NewNative(executorOptions(st, progress))
+			o, err := executorOptions(progress)
+			if err != nil {
+				return nil, err
+			}
+			return executor.NewNative(o)
 		},
 		Progress: progress,
 		Stdout:   runOut,

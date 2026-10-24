@@ -4,7 +4,6 @@ package vm
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -40,6 +39,8 @@ type Machine struct {
 	fw        *proto.Writer
 	console   *os.File
 	logPath   string
+	cpus      uint
+	memMiB    uint64
 
 	files    []*os.File // everything to close when stopping
 	mu       sync.Mutex // serializes runs
@@ -91,7 +92,7 @@ func Start(ctx context.Context, o Options) (*Machine, error) {
 		return nil, err
 	}
 
-	m := &Machine{logPath: filepath.Join(o.Dir, "console.log")}
+	m := &Machine{logPath: filepath.Join(o.Dir, "console.log"), cpus: cpus, memMiB: mem}
 	ok := false
 	var files []*os.File
 	defer func() {
@@ -232,63 +233,22 @@ func (m *Machine) Run(ctx context.Context, spec proto.Spec, image io.Reader, std
 	stopOnCancel := context.AfterFunc(ctx, func() { m.stop() })
 	defer stopOnCancel()
 
-	b, err := json.Marshal(spec)
-	if err != nil {
+	res, err := hostRun(m.fromGuest, m.fw, spec, image, stdout, stderr, export)
+	var ce *channelError
+	if errors.As(err, &ce) {
+		err = m.channelErr(ctx, ce.err)
+		m.stop() // the channel is out of sync and unusable
 		return proto.Result{}, err
 	}
-	if err := m.fw.Frame(proto.FrameSpec, b); err != nil {
-		return proto.Result{}, m.channelErr(ctx, err)
-	}
-	sendErr := make(chan error, 1)
-	go func() {
-		buf := make([]byte, 256<<10)
-		_, err := io.CopyBuffer(m.fw.Stream(proto.FrameImage), image, buf)
-		// Always end the stream so the guest finishes the request.
-		if ferr := m.fw.Frame(proto.FrameImage, nil); err == nil {
-			err = ferr
-		}
-		sendErr <- err
-	}()
-
-	var buf []byte
-	for {
-		typ, p, err := proto.ReadFrame(m.fromGuest, buf)
-		if err != nil {
-			return proto.Result{}, m.channelErr(ctx, err)
-		}
-		buf = p[:0]
-		var werr error
-		switch typ {
-		case proto.FrameStdout:
-			_, werr = stdout.Write(p)
-		case proto.FrameStderr:
-			_, werr = stderr.Write(p)
-		case proto.FrameExport:
-			if len(p) > 0 {
-				_, werr = export.Write(p)
-			}
-		case proto.FrameResult:
-			var res proto.Result
-			if err := json.Unmarshal(p, &res); err != nil {
-				return proto.Result{}, err
-			}
-			if err := <-sendErr; err != nil {
-				return proto.Result{}, fmt.Errorf("sending image to the build VM: %w", err)
-			}
-			return res, nil
-		default:
-			return proto.Result{}, fmt.Errorf("%w %q from guest", proto.ErrUnexpectedFrame, typ)
-		}
-		if werr != nil {
-			// Keep draining so the channel stays in sync; report later.
-			stdout, stderr, export = io.Discard, io.Discard, &errWriter{werr}
-		}
-	}
+	return res, err
 }
 
-type errWriter struct{ err error }
+// Closed reports whether the VM has stopped.
+func (m *Machine) Closed() bool { return m.closed.Load() }
 
-func (e *errWriter) Write([]byte) (int, error) { return 0, e.err }
+// CPUs and MemoryMiB report the VM's size.
+func (m *Machine) CPUs() uint        { return m.cpus }
+func (m *Machine) MemoryMiB() uint64 { return m.memMiB }
 
 func (m *Machine) channelErr(ctx context.Context, err error) error {
 	if ctx.Err() != nil {
