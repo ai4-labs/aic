@@ -12,6 +12,8 @@ import (
 	"time"
 
 	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/google/go-containerregistry/pkg/v1/empty"
+	"github.com/google/go-containerregistry/pkg/v1/layout"
 )
 
 // ImageInfo describes a stored image.
@@ -255,4 +257,46 @@ func (s *Store) gc(im *v1.IndexManifest) error {
 		}
 	}
 	return nil
+}
+
+// Clean removes everything in the store: all images, the build cache and
+// the unpacked copies, leaving an empty store. It returns the number of
+// images removed and the bytes freed.
+func (s *Store) Clean() (images int, freed int64, err error) {
+	err = s.withLock(func() error {
+		if im, err := s.indexManifest(); err == nil {
+			images = len(im.Manifests)
+		}
+		ents, err := os.ReadDir(s.dir)
+		if err != nil {
+			return err
+		}
+		for _, e := range ents {
+			if e.Name() == ".lock" {
+				continue
+			}
+			p := filepath.Join(s.dir, e.Name())
+			freed += du(p)
+			if err := os.RemoveAll(p); err != nil {
+				return err
+			}
+		}
+		_, err = layout.Write(s.dir, empty.Index)
+		return err
+	})
+	return images, freed, err
+}
+
+// du returns the size of the files under p.
+func du(p string) int64 {
+	var n int64
+	filepath.WalkDir(p, func(_ string, d fs.DirEntry, err error) error {
+		if err == nil && d.Type().IsRegular() {
+			if info, err := d.Info(); err == nil {
+				n += info.Size()
+			}
+		}
+		return nil
+	})
+	return n
 }

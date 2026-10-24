@@ -381,3 +381,30 @@ func TestTerminalEnv(t *testing.T) {
 		t.Errorf("env = %s, want the image's TERM kept", got)
 	}
 }
+
+func TestCLIClean(t *testing.T) {
+	t.Setenv("AIC_STORE", filepath.Join(t.TempDir(), "store"))
+	t.Setenv("AIC_VM_DIR", filepath.Join(t.TempDir(), "vm"))
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte("FROM scratch\nCOPY Dockerfile /\n"), 0o644)
+	if code, _, stderr := runCLI(t, "build", "-q", "-t", "app", dir); code != exitOK {
+		t.Fatalf("build: %s", stderr)
+	}
+	os.MkdirAll(os.Getenv("AIC_VM_DIR"), 0o755)
+	os.WriteFile(filepath.Join(os.Getenv("AIC_VM_DIR"), "kernel"), []byte("k"), 0o644)
+
+	// Without a terminal, --force is required.
+	if code, _, stderr := runCLI(t, "clean"); code != exitUsage || !strings.Contains(stderr, "--force") {
+		t.Errorf("clean without --force = %d: %s", code, stderr)
+	}
+	code, stdout, stderr := runCLI(t, "clean", "--force")
+	if code != exitOK || !strings.Contains(stdout, "Removed 1 image") {
+		t.Fatalf("clean = %d\nstdout: %s\nstderr: %s", code, stdout, stderr)
+	}
+	if _, stdout, _ := runCLI(t, "images", "-q"); strings.TrimSpace(stdout) != "" {
+		t.Errorf("images after clean: %q", stdout)
+	}
+	if _, err := os.Stat(os.Getenv("AIC_VM_DIR")); err == nil {
+		t.Error("VM dir survived clean")
+	}
+}

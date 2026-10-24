@@ -65,3 +65,37 @@ func TestFlat(t *testing.T) {
 		t.Error("copy survived prune")
 	}
 }
+
+func TestClean(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	img, err := random.Image(1024, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, _ := ParseLocal("app:1")
+	if err := s.Put(img, ref); err != nil {
+		t.Fatal(err)
+	}
+	r, _ := s.Flat(img)
+	io.ReadAll(r)
+	r.Close()
+	n, freed, err := s.Clean()
+	if err != nil || n != 1 || freed == 0 {
+		t.Fatalf("Clean = %d, %d, %v", n, freed, err)
+	}
+	if list, err := s.List(); err != nil || len(list) != 0 {
+		t.Errorf("after Clean: %d images, %v", len(list), err)
+	}
+	for _, d := range []string{"blobs/sha256", "flat"} {
+		if ents, _ := os.ReadDir(filepath.Join(s.Dir(), d)); len(ents) != 0 {
+			t.Errorf("%s has %d entries after Clean", d, len(ents))
+		}
+	}
+	// The store still works.
+	if err := s.Put(img, ref); err != nil {
+		t.Fatal(err)
+	}
+}

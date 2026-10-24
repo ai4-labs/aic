@@ -62,6 +62,7 @@ aic login [-u USER] [--password-stdin] REGISTRY   log in (credentials are verifi
 aic logout [-a] [REGISTRY]       remove credentials saved by aic login
 aic images [-q] [--no-trunc]     list local images
 aic prune [--vm]                 remove the build cache and unpacked images (and the VM's cached files)
+aic clean [-f]                   remove all images, caches and VM files (keeps credentials)
 aic tag IMAGE TARGET...          add names to a local image
 aic rmi [-f] [-a] IMAGE...       remove images (a name untags; an ID removes all its names)
 aic pull [--platform OS/ARCH] IMAGE
