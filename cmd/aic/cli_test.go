@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func runCLI(t *testing.T, args ...string) (int, string, string) {
@@ -61,6 +62,72 @@ func TestCLIBuild(t *testing.T) {
 	for _, ref := range []string{"a", "localhost/b:2", digest[:19]} {
 		if code, _, stderr := runCLI(t, "push", ref, "127.0.0.1:1/x:1", "-q"); code != exitError || strings.Contains(stderr, "image not known") {
 			t.Errorf("push %s: code %d, stderr %s (want a network error, not a lookup failure)", ref, code, stderr)
+		}
+	}
+}
+
+func TestCLIImagesAndRmi(t *testing.T) {
+	t.Setenv("AIC_STORE", t.TempDir())
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte("FROM scratch\nCOPY Dockerfile /\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, stdout, stderr := runCLI(t, "build", "-q", "-t", "app:1", "-t", "registry.example.com/team/app:2", dir)
+	if code != exitOK {
+		t.Fatalf("build: %s", stderr)
+	}
+	id := strings.TrimPrefix(strings.TrimSpace(stdout), "sha256:")[:12]
+
+	_, stdout, _ = runCLI(t, "images")
+	for _, want := range []string{"REPOSITORY", "localhost/app", "registry.example.com/team/app", id, "Less than a minute ago"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("images output missing %q:\n%s", want, stdout)
+		}
+	}
+	if _, stdout, _ = runCLI(t, "images", "-q"); strings.TrimSpace(stdout) != id {
+		t.Errorf("images -q = %q, want %q", stdout, id)
+	}
+
+	if code, _, stderr = runCLI(t, "rmi", id); code != exitError || !strings.Contains(stderr, "--force") {
+		t.Errorf("rmi by ID with two names: code %d, %s", code, stderr)
+	}
+	if code, stdout, _ = runCLI(t, "rmi", "app:1"); code != exitOK || stdout != "Untagged: localhost/app:1\n" {
+		t.Errorf("rmi app:1: code %d, %q", code, stdout)
+	}
+	if code, stdout, _ = runCLI(t, "rmi", "-f", id); code != exitOK || !strings.Contains(stdout, "Deleted: "+id) {
+		t.Errorf("rmi -f: code %d, %q", code, stdout)
+	}
+	if _, stdout, _ = runCLI(t, "images", "-q"); stdout != "" {
+		t.Errorf("images after rmi = %q", stdout)
+	}
+	if code, _, stderr = runCLI(t, "rmi", "nope"); code != exitError || !strings.Contains(stderr, "image not known") {
+		t.Errorf("rmi nope: code %d, %s", code, stderr)
+	}
+	if code, _, _ = runCLI(t, "rmi"); code != exitUsage {
+		t.Errorf("rmi without args: code %d", code)
+	}
+	if code, _, _ = runCLI(t, "rmi", "-a", "x"); code != exitUsage {
+		t.Errorf("rmi -a x: code %d", code)
+	}
+}
+
+func TestHumanFormats(t *testing.T) {
+	now := time.Now()
+	for d, want := range map[time.Duration]string{
+		30 * time.Second:     "Less than a minute ago",
+		5 * time.Minute:      "5 minutes ago",
+		time.Hour:            "an hour ago",
+		3 * 24 * time.Hour:   "3 days ago",
+		21 * 24 * time.Hour:  "3 weeks ago",
+		400 * 24 * time.Hour: "13 months ago",
+	} {
+		if got := humanAgo(now, now.Add(-d)); got != want {
+			t.Errorf("humanAgo(%v) = %q, want %q", d, got, want)
+		}
+	}
+	for n, want := range map[int64]string{512: "512 B", 7_840_000: "7.84 MB", 1_200_000_000: "1.2 GB"} {
+		if got := humanSize(n); got != want {
+			t.Errorf("humanSize(%d) = %q, want %q", n, got, want)
 		}
 	}
 }

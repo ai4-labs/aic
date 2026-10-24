@@ -111,7 +111,7 @@ func (s *Store) Image(ref string) (v1.Image, error) {
 		if err != nil {
 			return err
 		}
-		desc, err := find(im.Manifests, ref)
+		desc, _, err := find(im.Manifests, ref)
 		if err != nil {
 			return err
 		}
@@ -121,20 +121,22 @@ func (s *Store) Image(ref string) (v1.Image, error) {
 	return img, err
 }
 
-func find(descs []v1.Descriptor, ref string) (*v1.Descriptor, error) {
+// find resolves ref to a descriptor. byName is the stored name if ref
+// matched a name, or "" if it matched a digest.
+func find(descs []v1.Descriptor, ref string) (desc *v1.Descriptor, byName string, err error) {
 	hex := strings.TrimPrefix(ref, "sha256:")
 	if isHex(hex) && (len(hex) >= 12 || strings.HasPrefix(ref, "sha256:")) {
 		var found *v1.Descriptor
 		for i, d := range descs {
 			if strings.HasPrefix(d.Digest.Hex, hex) {
 				if found != nil && found.Digest != d.Digest {
-					return nil, fmt.Errorf("%s: ambiguous digest prefix", ref)
+					return nil, "", fmt.Errorf("%s: ambiguous digest prefix", ref)
 				}
 				found = &descs[i]
 			}
 		}
 		if found != nil {
-			return found, nil
+			return found, "", nil
 		}
 	}
 	// Names: try as given (docker.io default), then with localhost/.
@@ -148,11 +150,11 @@ func find(descs []v1.Descriptor, ref string) (*v1.Descriptor, error) {
 	for _, n := range names {
 		for i, d := range descs {
 			if d.Annotations[RefAnnotation] == n {
-				return &descs[i], nil
+				return &descs[i], n, nil
 			}
 		}
 	}
-	return nil, fmt.Errorf("%s: %w", ref, ErrNotFound)
+	return nil, "", fmt.Errorf("%s: %w", ref, ErrNotFound)
 }
 
 func isHex(s string) bool {

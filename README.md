@@ -46,6 +46,8 @@ aic build [flags] [CONTEXT]      build CONTEXT/Dockerfile (default context: .)
   --pull                         always pull base images
   -q, --quiet                    print only the image digest
 
+aic images [-q] [--no-trunc]     list local images
+aic rmi [-f] [-a] IMAGE...       remove images (a name untags; an ID removes all its names)
 aic pull [--platform OS/ARCH] IMAGE
 aic push IMAGE [DESTINATION]     IMAGE may be a name or a digest (prefix)
 aic version
@@ -100,4 +102,4 @@ or an AppArmor profile for aic.
   how large an image can be built (on macOS, the VM's memory).
 - The macOS VM is arm64 only (Apple silicon), and `RUN` uses the host's
   architecture: no emulation for other `--platform`s yet.
-- No `images`/`rmi`/`tag` commands or garbage collection of the store yet.
+- No `tag` command yet.
