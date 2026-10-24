@@ -158,19 +158,24 @@ func extractOne(st *extractState, tr *tar.Reader, hdr *tar.Header, p string) err
 	return nil
 }
 
-// exportRoot writes the container's filesystem as a tar stream.
-func exportRoot(w io.Writer, st *extractState) error {
+// exportTree writes dir (the whole filesystem for "/") as a tar stream,
+// with names relative to dir.
+func exportTree(w io.Writer, st *extractState, dir string) error {
 	tw := tar.NewWriter(w)
 	links := map[uint64]string{} // first path seen for multiply-linked inodes
-	err := filepath.WalkDir("/", func(p string, d fs.DirEntry, err error) error {
+	dir = filepath.Clean("/" + dir)
+	if _, err := os.Lstat(dir); errors.Is(err, fs.ErrNotExist) {
+		return tw.Close() // nothing to send back
+	}
+	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		name := strings.TrimPrefix(p, "/")
+		name := strings.TrimPrefix(strings.TrimPrefix(p, dir), "/")
 		if name == "" {
 			return nil
 		}
-		if mountPoints[name] {
+		if dir == "/" && mountPoints[name] {
 			return filepath.SkipDir
 		}
 		var s unix.Stat_t
@@ -242,6 +247,9 @@ func exportRoot(w io.Writer, st *extractState) error {
 		return err
 	}
 	for _, hdr := range st.skipped {
+		if dir != "/" {
+			break
+		}
 		if _, err := os.Lstat("/" + hdr.Name); err == nil || !errors.Is(err, fs.ErrNotExist) {
 			continue // replaced by the command
 		}

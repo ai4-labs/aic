@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -15,21 +16,27 @@ import (
 // fakeMachine echoes the image back as the export.
 type fakeMachine struct{ closed bool }
 
-func (f *fakeMachine) Run(_ context.Context, spec proto.Spec, image io.Reader, stdout, stderr, export io.Writer) (proto.Result, error) {
+func (f *fakeMachine) Run(_ context.Context, spec proto.Spec, image io.Reader, rio proto.IO) (proto.Result, error) {
 	b, err := io.ReadAll(image)
 	if err != nil {
 		return proto.Result{}, err
 	}
 	switch spec.Args[0] {
 	case "fail":
-		stderr.Write([]byte("boom\n"))
+		rio.Stderr.Write([]byte("boom\n"))
 		return proto.Result{ExitCode: 2}, nil
 	case "die":
 		f.closed = true
 		return proto.Result{}, errors.New("VM crashed")
+	case "cat":
+		// Report the first resize, then echo stdin.
+		size := <-rio.Resize
+		fmt.Fprintf(rio.Stdout, "%dx%d\n", size.Cols, size.Rows)
+		io.Copy(rio.Stdout, rio.Stdin)
+		return proto.Result{}, nil
 	}
-	stdout.Write([]byte("ran " + strings.Join(spec.Args, " ") + "\n"))
-	export.Write(b)
+	rio.Stdout.Write([]byte("ran " + strings.Join(spec.Args, " ") + "\n"))
+	rio.Export.Write(b)
 	return proto.Result{}, nil
 }
 
@@ -73,7 +80,8 @@ func TestDaemon(t *testing.T) {
 	}
 	image := bytes.Repeat([]byte("layer"), 300_000) // spans several frames
 	var stdout, stderr, export bytes.Buffer
-	res, err := c.Run(context.Background(), proto.Spec{Args: []string{"echo", "hi"}}, bytes.NewReader(image), &stdout, &stderr, &export)
+	res, err := c.Run(context.Background(), proto.Spec{Args: []string{"echo", "hi"}}, bytes.NewReader(image),
+		proto.IO{Stdout: &stdout, Stderr: &stderr, Export: &export})
 	if err != nil || res.ExitCode != 0 || res.Error != "" {
 		t.Fatalf("Run = %+v, %v", res, err)
 	}
@@ -81,7 +89,8 @@ func TestDaemon(t *testing.T) {
 		t.Errorf("stdout %q, export %d bytes", stdout.String(), export.Len())
 	}
 
-	res, err = c.Run(context.Background(), proto.Spec{Args: []string{"fail"}}, strings.NewReader("x"), &stdout, &stderr, io.Discard)
+	res, err = c.Run(context.Background(), proto.Spec{Args: []string{"fail"}}, strings.NewReader("x"),
+		proto.IO{Stdout: &stdout, Stderr: &stderr, Export: io.Discard})
 	if err != nil || res.ExitCode != 2 || stderr.String() != "boom\n" {
 		t.Errorf("failing run = %+v, %v, stderr %q", res, err, stderr.String())
 	}
@@ -107,13 +116,38 @@ func TestDaemon(t *testing.T) {
 	_ = fm
 }
 
+func TestDaemonStdin(t *testing.T) {
+	dir, _, _ := startFake(t)
+	c, err := NewClient(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resize := make(chan proto.Size, 1)
+	resize <- proto.Size{Rows: 24, Cols: 80}
+	input := strings.Repeat("hello\n", 50_000)
+	for i := 0; i < 2; i++ { // a second run must not see the first one's frames
+		var stdout bytes.Buffer
+		res, err := c.Run(context.Background(), proto.Spec{Args: []string{"cat"}, Stdin: true, TTY: true},
+			strings.NewReader("img"), proto.IO{Stdin: strings.NewReader(input), Resize: resize,
+				Stdout: &stdout, Stderr: io.Discard, Export: io.Discard})
+		if err != nil || res.ExitCode != 0 || res.Error != "" {
+			t.Fatalf("Run = %+v, %v", res, err)
+		}
+		if want := "80x24\n" + input; stdout.String() != want {
+			t.Errorf("stdout = %d bytes, want %d", stdout.Len(), len(want))
+		}
+		resize <- proto.Size{Rows: 24, Cols: 80}
+	}
+}
+
 func TestDaemonStopsWhenVMDies(t *testing.T) {
 	dir, _, done := startFake(t)
 	c, err := NewClient(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := c.Run(context.Background(), proto.Spec{Args: []string{"die"}}, strings.NewReader("x"), io.Discard, io.Discard, io.Discard)
+	res, err := c.Run(context.Background(), proto.Spec{Args: []string{"die"}}, strings.NewReader("x"),
+		proto.IO{Stdout: io.Discard, Stderr: io.Discard, Export: io.Discard})
 	if err != nil || !strings.Contains(res.Error, "VM crashed") {
 		t.Errorf("run = %+v, %v", res, err)
 	}

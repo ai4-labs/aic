@@ -35,7 +35,7 @@ type Status struct {
 
 // runner is what the daemon serves; *Machine in practice.
 type runner interface {
-	Run(ctx context.Context, spec proto.Spec, image io.Reader, stdout, stderr, export io.Writer) (proto.Result, error)
+	Run(ctx context.Context, spec proto.Spec, image io.Reader, rio proto.IO) (proto.Result, error)
 	Closed() bool
 }
 
@@ -79,52 +79,19 @@ func (s *server) handle(conn net.Conn) {
 			return
 		}
 		s.runs.Add(1)
-		s.run(conn, fw, spec)
+		// A client that goes away mid-run must not take the shared VM
+		// down: the run completes and its output is discarded.
+		_ = proto.ServeRun(conn, fw, spec, func(image io.Reader, rio proto.IO) proto.Result {
+			res, err := s.r.Run(context.Background(), spec, image, rio)
+			if err != nil {
+				res = proto.Result{Error: err.Error()}
+			}
+			return res
+		})
 		if s.r.Closed() {
 			s.stop() // the VM died; let the next build start afresh
 		}
 	}
-}
-
-func (s *server) run(conn net.Conn, fw *proto.Writer, spec proto.Spec) {
-	imgR, imgW := io.Pipe()
-	clientErr := make(chan error, 1)
-	go func() {
-		// Read the image until its end marker, even after the run has
-		// failed, so the client can finish sending and read the result.
-		var buf []byte
-		for {
-			typ, p, err := proto.ReadFrame(conn, buf)
-			if err == nil && typ != proto.FrameImage {
-				err = fmt.Errorf("%w %q, want image data", proto.ErrUnexpectedFrame, typ)
-			}
-			if err != nil {
-				imgW.CloseWithError(err)
-				clientErr <- err
-				return
-			}
-			if len(p) == 0 {
-				imgW.Close()
-				clientErr <- nil
-				return
-			}
-			buf = p[:0]
-			_, _ = imgW.Write(p)
-		}
-	}()
-	// A client that goes away mid-run must not take the shared VM down:
-	// the run completes and its output is discarded.
-	res, err := s.r.Run(context.Background(), spec, imgR,
-		fw.Stream(proto.FrameStdout), fw.Stream(proto.FrameStderr), fw.Stream(proto.FrameExport))
-	imgR.CloseWithError(errors.New("run finished"))
-	if err != nil {
-		res = proto.Result{Error: err.Error()}
-	}
-	if <-clientErr != nil {
-		return
-	}
-	b, _ := json.Marshal(res)
-	_ = fw.Frame(proto.FrameResult, b)
 }
 
 // listen creates the daemon socket, accessible only to the current user.
@@ -231,7 +198,7 @@ func NewClient(dir string) (*Client, error) {
 }
 
 // Run is like Machine.Run, through the daemon.
-func (c *Client) Run(ctx context.Context, spec proto.Spec, image io.Reader, stdout, stderr, export io.Writer) (proto.Result, error) {
+func (c *Client) Run(ctx context.Context, spec proto.Spec, image io.Reader, rio proto.IO) (proto.Result, error) {
 	conn, err := dial(c.dir)
 	if err != nil {
 		return proto.Result{}, fmt.Errorf("connecting to the VM: %w", err)
@@ -239,13 +206,13 @@ func (c *Client) Run(ctx context.Context, spec proto.Spec, image io.Reader, stdo
 	defer conn.Close()
 	stop := context.AfterFunc(ctx, func() { conn.Close() })
 	defer stop()
-	res, err := hostRun(conn, proto.NewWriter(conn), spec, image, stdout, stderr, export)
+	res, err := proto.HostRun(conn, proto.NewWriter(conn), spec, image, rio)
 	if err != nil && ctx.Err() != nil {
 		return proto.Result{}, ctx.Err()
 	}
-	var ce *channelError
+	var ce *proto.ChannelError
 	if errors.As(err, &ce) {
-		return proto.Result{}, fmt.Errorf("lost the connection to the VM (see `aic vm logs`): %w", ce.err)
+		return proto.Result{}, fmt.Errorf("lost the connection to the VM (see `aic vm logs`): %w", ce.Err)
 	}
 	return res, err
 }

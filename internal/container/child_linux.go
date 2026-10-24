@@ -7,12 +7,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"golang.org/x/sys/unix"
 
@@ -70,10 +73,22 @@ func child() proto.Result {
 	if err != nil {
 		return fail("running the command", err)
 	}
+	if cfg.Spec.Export != "" {
+		// A directory is sent back whatever the command's outcome. If it
+		// is gone, nothing is sent rather than an empty directory, which
+		// would read as every file having been deleted.
+		if fi, err := os.Lstat(cfg.Spec.Export); err != nil || !fi.IsDir() {
+			return fail("exporting "+cfg.Spec.Export, errors.New("the directory was removed or replaced"))
+		}
+		if err := exportTree(export, st, cfg.Spec.Export); err != nil {
+			return fail("exporting "+cfg.Spec.Export, err)
+		}
+		return proto.Result{ExitCode: code}
+	}
 	if code != 0 {
 		return proto.Result{ExitCode: code}
 	}
-	if err := exportRoot(export, st); err != nil {
+	if err := exportTree(export, st, "/"); err != nil {
 		return fail("exporting the filesystem", err)
 	}
 	return proto.Result{}
@@ -292,24 +307,41 @@ func runCommand(cfg childConfig) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	devnull, err := os.Open(os.DevNull)
-	if err != nil {
-		return 0, err
+	if spec.Chown != "" && (u.uid != 0 || u.gid != 0) {
+		// Best effort: only root is mapped without subordinate IDs.
+		_ = filepath.WalkDir(spec.Chown, func(p string, _ fs.DirEntry, err error) error {
+			if err == nil {
+				_ = unix.Lchown(p, u.uid, u.gid)
+			}
+			return nil
+		})
 	}
-	defer devnull.Close()
+	var stdin *os.File = os.Stdin
+	if !spec.Stdin {
+		devnull, err := os.Open(os.DevNull)
+		if err != nil {
+			return 0, err
+		}
+		defer devnull.Close()
+		stdin = devnull
+	}
 	cmd := &exec.Cmd{
 		Path:   bin,
 		Args:   spec.Args,
 		Env:    env,
 		Dir:    workdir,
-		Stdin:  devnull,
+		Stdin:  stdin,
 		Stdout: os.Stdout,
 		Stderr: os.Stderr,
 		SysProcAttr: &syscall.SysProcAttr{
 			Credential: &syscall.Credential{Uid: uint32(u.uid), Gid: uint32(u.gid), Groups: u.groups, NoSetGroups: cfg.SingleID},
 		},
 	}
-	err = cmd.Run()
+	if spec.TTY {
+		err = runOnTerminal(cmd, spec, u)
+	} else {
+		err = cmd.Run()
+	}
 	var ee *exec.ExitError
 	if errors.As(err, &ee) {
 		if ws, ok := ee.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
@@ -437,4 +469,67 @@ func readDB(p string) [][]string {
 		out = append(out, strings.Split(line, ":"))
 	}
 	return out
+}
+
+// runOnTerminal runs cmd on a new pseudo-terminal inside the container,
+// relaying it to init's standard streams and applying size changes that
+// arrive on fdResize.
+func runOnTerminal(cmd *exec.Cmd, spec proto.Spec, u userInfo) error {
+	master, err := os.OpenFile("/dev/ptmx", os.O_RDWR|unix.O_NOCTTY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return fmt.Errorf("opening a terminal: %w", err)
+	}
+	defer master.Close()
+	mfd := int(master.Fd())
+	n, err := unix.IoctlGetInt(mfd, unix.TIOCGPTN)
+	if err != nil {
+		return err
+	}
+	if err := unix.IoctlSetPointerInt(mfd, unix.TIOCSPTLCK, 0); err != nil {
+		return err
+	}
+	setSize := func(s proto.Size) {
+		if s.Rows > 0 && s.Cols > 0 {
+			_ = unix.IoctlSetWinsize(mfd, unix.TIOCSWINSZ, &unix.Winsize{Row: s.Rows, Col: s.Cols})
+		}
+	}
+	setSize(spec.Size)
+	slave, err := os.OpenFile(fmt.Sprintf("/dev/pts/%d", n), os.O_RDWR|unix.O_NOCTTY, 0)
+	if err != nil {
+		return err
+	}
+	_ = unix.Fchown(int(slave.Fd()), u.uid, u.gid)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = slave, slave, slave
+	cmd.SysProcAttr.Setsid = true
+	cmd.SysProcAttr.Setctty = true
+	cmd.SysProcAttr.Ctty = 0
+	err = cmd.Start()
+	slave.Close()
+	if err != nil {
+		return err
+	}
+	if spec.Stdin {
+		go io.Copy(master, os.Stdin)
+	}
+	go func() {
+		dec := json.NewDecoder(os.NewFile(fdResize, "resize"))
+		for {
+			var s proto.Size
+			if dec.Decode(&s) != nil {
+				return
+			}
+			setSize(s)
+		}
+	}()
+	outDone := make(chan struct{})
+	go func() {
+		io.Copy(os.Stdout, master) // ends with EIO once the terminal is closed
+		close(outDone)
+	}()
+	err = cmd.Wait()
+	select {
+	case <-outDone:
+	case <-time.After(2 * time.Second): // background processes keep it open
+	}
+	return err
 }

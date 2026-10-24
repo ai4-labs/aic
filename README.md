@@ -1,8 +1,8 @@
 # aic
 
-A podman-like container image builder. `aic` builds OCI images from a
-**Dockerfile** and pushes/pulls them to and from any OCI registry. It is a
-single binary: no daemon, no podman or Docker, no root.
+A podman-like container tool. `aic` builds OCI images from a **Dockerfile**,
+runs them in isolated containers, and pushes/pulls them to and from any OCI
+registry. It is a single binary: no daemon, no podman or Docker, no root.
 
 ```sh
 aic build -t hello examples/hello
@@ -48,6 +48,7 @@ aic build [flags] [CONTEXT]      build CONTEXT/Dockerfile (default context: .)
   --no-cache                     run every step instead of using the build cache
   -q, --quiet                    print only the image digest
 
+aic run [flags] IMAGE [COMMAND [ARG...]]   run a command in a new container (see below)
 aic login -i [REGISTRY]          guided login: pick a registry, get help creating a token
 aic login [-u USER] [--password-stdin] REGISTRY   log in (credentials are verified first)
 aic logout [-a] [REGISTRY]       remove credentials saved by aic login
@@ -66,8 +67,67 @@ destination like `ghcr.io/org/hello`) is tagged `sha256-<image digest>`, and
 `:latest` is rejected. A name without a tag also refers to a repository's only
 local image, so `aic push hello ghcr.io/org/hello` works after `-t hello`.
 
-Flags may come before or after positional arguments. Shell completion:
-`aic completion bash|zsh|fish|powershell`.
+Flags may come before or after positional arguments (for `aic run`, only
+before IMAGE). Shell completion: `aic completion bash|zsh|fish|powershell`.
+
+## Running containers
+
+`aic run` runs a command in a throwaway container, for example to let an AI
+agent or untrusted code work on a project without access to the rest of
+your machine:
+
+```sh
+aic run alpine:3.20 echo hello
+aic run -it python:3.12 python                 # interactive, on a terminal
+aic run -w . python:3.12 python -m pytest      # with a copy of the current directory
+aic run -w .:/src --network=host golang:1.26 go build ./...
+```
+
+```
+  -w, --workspace DIR[:PATH]   copy DIR into the container at PATH (default /workspace) and copy changes back
+  --network none|host          none (default): loopback only; host: the host's network (on macOS, the VM's)
+  -i, --interactive            connect standard input
+  -t, --tty                    run on a terminal
+  -e, --env KEY[=VALUE]        set a variable; KEY alone passes the host's value (repeatable)
+  -u, --user USER[:GROUP]      run as this user (default: the image's)
+  --workdir DIR                working directory (default: the workspace, else the image's)
+  --platform OS/ARCH           image platform to pull
+```
+
+- The container sees no host files and, by default, has no network.
+- With `-w`, DIR is copied in before the command starts and owned by the
+  command's user. When the command exits, whatever its exit status, new,
+  changed and deleted files are copied back to DIR. Files you edit on the
+  host meanwhile are kept unless the container changed them too. If the
+  container removes the workspace directory itself, nothing is copied back.
+- The image is pulled if it isn't in the store. The container is removed
+  when the command exits.
+- aic exits with the command's exit status: 125 if it couldn't run the
+  command, 127 if the command wasn't found.
+
+### Example: Claude Code
+
+[examples/claude-code](examples/claude-code/Dockerfile) packages
+[Claude Code](https://docs.anthropic.com/en/docs/claude-code). In a container
+it can only change the copy of your project, so it is reasonable to let it run
+without permission prompts:
+
+```sh
+aic build -t claude-code examples/claude-code
+export ANTHROPIC_API_KEY=sk-ant-...
+
+# Interactive session on the current directory.
+aic run -it -w . --network=host -e ANTHROPIC_API_KEY claude-code
+
+# Headless: make a change, then review it with git diff.
+aic run -w . --network=host -e ANTHROPIC_API_KEY claude-code \
+  -p "make the failing tests pass" --dangerously-skip-permissions
+git diff
+```
+
+Claude Code needs the network to reach the API (`--network=host`; on macOS
+that is the VM's network, not your Mac's localhost). Its settings and login
+are not kept between runs; pass the API key with `-e` each time.
 
 ## The build VM (macOS)
 
@@ -123,7 +183,9 @@ or an AppArmor profile for aic.
 
 ## Limitations
 
-- Each `RUN` unpacks the full image so far into a tmpfs, so memory bounds
-  how large an image can be built (on macOS, the VM's memory).
+- Each `RUN` and `aic run` unpacks the full image (and workspace) into a
+  tmpfs, so memory bounds how large they can be (on macOS, the VM's memory).
+- On macOS, `aic run` boots a VM per run (about a second) unless `aic vm
+  start` is running; the background VM runs one container at a time.
 - The macOS VM is arm64 only (Apple silicon), and `RUN` uses the host's
   architecture: no emulation for other `--platform`s yet.

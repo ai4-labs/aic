@@ -17,7 +17,7 @@ import (
 func runCLI(t *testing.T, args ...string) (int, string, string) {
 	t.Helper()
 	var stdout, stderr bytes.Buffer
-	code := run(args, &stdout, &stderr)
+	code := runWithInput(args, strings.NewReader(""), &stdout, &stderr)
 	return code, stdout.String(), stderr.String()
 }
 
@@ -40,6 +40,12 @@ func TestCLIUsage(t *testing.T) {
 		{[]string{"push", "hello"}, exitUsage, "has no registry"},
 		{[]string{"push", "registry.example.com/x:1"}, exitError, "image not known"},
 		{[]string{"build", "--platform", "nonsense!", "."}, exitUsage, "platform"},
+		{[]string{"run"}, exitUsage, "requires at least 1 arg"},
+		{[]string{"run", "--network", "bridge", "x"}, exitUsage, "invalid --network"},
+		{[]string{"run", "-w", "/does/not/exist", "x"}, exitUsage, "no such file"},
+		{[]string{"run", "-w", ".:/", "x"}, exitUsage, "invalid workspace path"},
+		{[]string{"run", "-it", "x"}, exitUsage, "needs a terminal"},
+		{[]string{"run", "127.0.0.1:1/x:1"}, exitRunFailed, "127.0.0.1:1"},
 	} {
 		code, stdout, stderr := runCLI(t, tc.args...)
 		if code != tc.code || !strings.Contains(stdout+stderr, tc.want) {
@@ -319,6 +325,39 @@ func TestCLITag(t *testing.T) {
 	} {
 		if code, _, stderr := runCLI(t, tc.args...); code != tc.code || !strings.Contains(stderr, tc.want) {
 			t.Errorf("aic %q = %d %s; want %d %q", tc.args, code, stderr, tc.code, tc.want)
+		}
+	}
+}
+
+func TestCLIRunNoCommand(t *testing.T) {
+	t.Setenv("AIC_STORE", t.TempDir())
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte("FROM scratch\nLABEL a=b\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, stderr := runCLI(t, "build", "-q", "-t", "nocmd", dir); code != exitOK {
+		t.Fatalf("build = %d: %s", code, stderr)
+	}
+	if code, _, stderr := runCLI(t, "run", "nocmd"); code != exitUsage || !strings.Contains(stderr, "no default command") {
+		t.Errorf("run = %d: %s", code, stderr)
+	}
+}
+
+func TestParseWorkspace(t *testing.T) {
+	dir := t.TempDir()
+	for _, tc := range []struct{ in, dir, path string }{
+		{dir, dir, "/workspace"},
+		{dir + ":/src", dir, "/src"},
+		{dir + ":/src/../app/", dir, "/app"},
+	} {
+		d, p, err := parseWorkspace(tc.in)
+		if err != nil || d != tc.dir || p != tc.path {
+			t.Errorf("parseWorkspace(%q) = %q, %q, %v; want %q, %q", tc.in, d, p, err, tc.dir, tc.path)
+		}
+	}
+	for _, in := range []string{dir + ":/", dir + ":/..", filepath.Join(dir, "missing")} {
+		if _, _, err := parseWorkspace(in); err == nil {
+			t.Errorf("parseWorkspace(%q) succeeded", in)
 		}
 	}
 }

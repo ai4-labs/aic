@@ -127,50 +127,14 @@ func serve(r io.Reader, w io.Writer) error {
 		if err := json.Unmarshal(payload, &spec); err != nil {
 			return err
 		}
-		if err := runOne(r, fw, spec); err != nil {
+		if err := proto.ServeRun(r, fw, spec, func(image io.Reader, rio proto.IO) proto.Result {
+			res, err := container.Run(context.Background(), spec, image, rio)
+			if err != nil {
+				res = proto.Result{Error: err.Error()}
+			}
+			return res
+		}); err != nil {
 			return err
 		}
 	}
-}
-
-func runOne(r io.Reader, fw *proto.Writer, spec proto.Spec) error {
-	imgR, imgW := io.Pipe()
-	done := make(chan proto.Result, 1)
-	go func() {
-		res, err := container.Run(context.Background(), spec, imgR,
-			fw.Stream(proto.FrameStdout), fw.Stream(proto.FrameStderr), fw.Stream(proto.FrameExport))
-		if err != nil {
-			res = proto.Result{Error: err.Error()}
-		}
-		imgR.CloseWithError(errors.New("container exited"))
-		done <- res
-	}()
-
-	// Relay the image until its end marker, even if the container has
-	// already failed: the host doesn't read results until it is done.
-	buf := make([]byte, 0, proto.MaxPayload)
-	for {
-		typ, p, err := proto.ReadFrame(r, buf)
-		if err != nil {
-			imgW.CloseWithError(err)
-			return err
-		}
-		if typ != proto.FrameImage {
-			return fmt.Errorf("%w %q, want image data", proto.ErrUnexpectedFrame, typ)
-		}
-		if len(p) == 0 {
-			imgW.Close()
-			break
-		}
-		_, _ = imgW.Write(p) // fails once the container stops reading
-	}
-	res := <-done
-	if err := fw.Frame(proto.FrameExport, nil); err != nil {
-		return err
-	}
-	b, err := json.Marshal(res)
-	if err != nil {
-		return err
-	}
-	return fw.Frame(proto.FrameResult, b)
 }

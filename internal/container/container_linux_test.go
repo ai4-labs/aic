@@ -4,6 +4,7 @@ package container
 
 import (
 	"archive/tar"
+	"bufio"
 	"bytes"
 	"context"
 	"debug/elf"
@@ -15,6 +16,9 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/rakyll/ai-container/internal/proto"
 )
@@ -30,6 +34,31 @@ func TestMain(m *testing.M) {
 }
 
 func helper() int {
+	switch os.Getenv("MODE") {
+	case "cat":
+		io.Copy(os.Stdout, os.Stdin)
+		return 0
+	case "tty":
+		ws, err := unix.IoctlGetWinsize(0, unix.TIOCGWINSZ)
+		if err != nil {
+			fmt.Println("not a terminal:", err)
+			return 1
+		}
+		line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+		fmt.Printf("size=%dx%d line=%s", ws.Col, ws.Row, line)
+		return 0
+	case "ws":
+		wd, _ := os.Getwd()
+		in, err := os.ReadFile("in")
+		if err != nil {
+			fmt.Println(err)
+			return 1
+		}
+		fmt.Printf("wd=%s in=%s uid=%d\n", wd, in, os.Getuid())
+		os.WriteFile("out", []byte("out"), 0o644)
+		os.Remove("gone")
+		return 3
+	}
 	fmt.Printf("uid=%d\n", os.Getuid())
 	up := 0
 	ifaces, _ := net.Interfaces()
@@ -99,6 +128,9 @@ func testImage(t *testing.T) []byte {
 	add(&tar.Header{Name: "del", Typeflag: tar.TypeReg, Mode: 0o644}, []byte("d"))
 	add(&tar.Header{Name: "link", Typeflag: tar.TypeSymlink, Linkname: "/owned"}, nil)
 	add(&tar.Header{Name: "hard", Typeflag: tar.TypeLink, Linkname: "mod"}, nil)
+	add(&tar.Header{Name: "work/", Typeflag: tar.TypeDir, Mode: 0o755}, nil)
+	add(&tar.Header{Name: "work/in", Typeflag: tar.TypeReg, Mode: 0o644}, []byte("in"))
+	add(&tar.Header{Name: "work/gone", Typeflag: tar.TypeReg, Mode: 0o644}, []byte("g"))
 	tw.Close()
 	return buf.Bytes()
 }
@@ -113,9 +145,15 @@ type entry struct {
 
 func runHelper(t *testing.T, env ...string) (proto.Result, map[string]entry, string) {
 	t.Helper()
-	var stdout, stderr, export bytes.Buffer
 	spec := proto.Spec{Args: []string{"helper"}, Env: append([]string{"AIC_TEST_HELPER=1", "PATH=/bin"}, env...), Network: "none"}
-	res, err := Run(context.Background(), spec, bytes.NewReader(testImage(t)), &stdout, &stderr, &export)
+	return runSpec(t, spec, nil, testImage(t))
+}
+
+func runSpec(t *testing.T, spec proto.Spec, stdin io.Reader, image []byte) (proto.Result, map[string]entry, string) {
+	t.Helper()
+	var stdout, stderr, export bytes.Buffer
+	res, err := Run(context.Background(), spec, bytes.NewReader(image),
+		proto.IO{Stdin: stdin, Stdout: &stdout, Stderr: &stderr, Export: &export})
 	if err != nil {
 		if errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.EACCES) || strings.Contains(err.Error(), "operation not permitted") {
 			t.Skipf("user namespaces unavailable: %v", err)
@@ -204,7 +242,7 @@ func TestRunChown(t *testing.T) {
 func TestRunSetupError(t *testing.T) {
 	var stdout, stderr, export bytes.Buffer
 	spec := proto.Spec{Args: []string{"does-not-exist"}, Network: "none"}
-	res, err := Run(context.Background(), spec, bytes.NewReader(testImage(t)), &stdout, &stderr, &export)
+	res, err := Run(context.Background(), spec, bytes.NewReader(testImage(t)), proto.IO{Stdout: &stdout, Stderr: &stderr, Export: &export})
 	if err != nil {
 		t.Skipf("Run: %v", err)
 	}
@@ -213,5 +251,45 @@ func TestRunSetupError(t *testing.T) {
 	}
 	if !strings.Contains(res.Error, "executable file not found") {
 		t.Errorf("result = %+v", res)
+	}
+}
+
+func TestRunStdin(t *testing.T) {
+	input := strings.Repeat("stdin data\n", 10_000)
+	spec := proto.Spec{Args: []string{"helper"}, Env: []string{"AIC_TEST_HELPER=1", "MODE=cat"}, Network: "none", Stdin: true}
+	res, _, out := runSpec(t, spec, strings.NewReader(input), testImage(t))
+	if res.Error != "" || res.ExitCode != 0 || out != input {
+		t.Fatalf("result = %+v, output %d bytes, want %d", res, len(out), len(input))
+	}
+}
+
+func TestRunTTY(t *testing.T) {
+	spec := proto.Spec{Args: []string{"helper"}, Env: []string{"AIC_TEST_HELPER=1", "MODE=tty"}, Network: "none",
+		Stdin: true, TTY: true, Size: proto.Size{Rows: 33, Cols: 101}}
+	// Keep stdin open until the command has read its line, as a terminal would.
+	pr, pw := io.Pipe()
+	go func() {
+		pw.Write([]byte("hello\n"))
+		time.Sleep(2 * time.Second)
+		pw.Close()
+	}()
+	res, _, out := runSpec(t, spec, pr, testImage(t))
+	if res.Error != "" || res.ExitCode != 0 || !strings.Contains(out, "size=101x33 line=hello") {
+		t.Fatalf("result = %+v, output %q", res, out)
+	}
+}
+
+func TestRunExportDir(t *testing.T) {
+	spec := proto.Spec{Args: []string{"helper"}, Env: []string{"AIC_TEST_HELPER=1", "MODE=ws"}, Network: "none",
+		WorkDir: "/work", Export: "/work", Chown: "/work"}
+	res, files, out := runSpec(t, spec, nil, testImage(t))
+	if res.Error != "" || res.ExitCode != 3 {
+		t.Fatalf("result = %+v, output %q", res, out)
+	}
+	if !strings.Contains(out, "wd=/work in=in") {
+		t.Errorf("output = %q", out)
+	}
+	if len(files) != 2 || files["in"].body != "in" || files["out"].body != "out" {
+		t.Errorf("exported %v, want in and out (relative to /work), even though the command failed", files)
 	}
 }

@@ -223,8 +223,8 @@ func (m *Machine) logTail() string {
 
 // Run executes spec in a fresh container in the VM. image is the
 // flattened root filesystem; the container's filesystem afterwards is
-// written to export.
-func (m *Machine) Run(ctx context.Context, spec proto.Spec, image io.Reader, stdout, stderr, export io.Writer) (proto.Result, error) {
+// written to rio.Export.
+func (m *Machine) Run(ctx context.Context, spec proto.Spec, image io.Reader, rio proto.IO) (proto.Result, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.closed.Load() {
@@ -234,10 +234,10 @@ func (m *Machine) Run(ctx context.Context, spec proto.Spec, image io.Reader, std
 	stopOnCancel := context.AfterFunc(ctx, func() { m.stop() })
 	defer stopOnCancel()
 
-	res, err := hostRun(m.fromGuest, m.fw, spec, image, stdout, stderr, export)
-	var ce *channelError
+	res, err := proto.HostRun(m.fromGuest, m.fw, spec, image, rio)
+	var ce *proto.ChannelError
 	if errors.As(err, &ce) {
-		err = m.channelErr(ctx, ce.err)
+		err = m.channelErr(ctx, ce.Err)
 		m.stop() // the channel is out of sync and unusable
 		return proto.Result{}, err
 	}

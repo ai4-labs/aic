@@ -22,6 +22,25 @@ type Spec struct {
 	// loopback) or "host" (share the network of the host or VM).
 	Network  string `json:"network,omitempty"`
 	Hostname string `json:"hostname,omitempty"`
+
+	// Stdin connects the command's standard input to the caller's.
+	Stdin bool `json:"stdin,omitempty"`
+	// TTY runs the command on a terminal of the given size.
+	TTY  bool `json:"tty,omitempty"`
+	Size Size `json:"size,omitempty"`
+	// Export, if set, sends back only this directory, relative to it,
+	// and also when the command fails. Otherwise the whole root
+	// filesystem is sent back after a successful command.
+	Export string `json:"export,omitempty"`
+	// Chown, if set, is a directory whose contents are given to the
+	// command's user before it runs.
+	Chown string `json:"chown,omitempty"`
+}
+
+// Size is a terminal size.
+type Size struct {
+	Rows uint16 `json:"rows"`
+	Cols uint16 `json:"cols"`
 }
 
 // Result reports how a run ended. Error is set if the container could not
@@ -40,6 +59,10 @@ const (
 	FrameStderr byte = 'E' // guest -> host
 	FrameExport byte = 'X' // guest -> host: container rootfs tar; empty = EOF
 	FrameResult byte = 'R' // guest -> host: JSON Result, ends a run
+
+	FrameStdin  byte = 'D' // host -> guest: stdin data; empty = EOF
+	FrameResize byte = 'W' // host -> guest: JSON Size
+	FrameDone   byte = 'Z' // host -> guest: host has the result; ends the run
 
 	// Requests to aic's VM daemon on macOS, each on its own connection.
 	FrameStatus byte = 'Q' // client -> daemon (empty); daemon -> client: JSON status
@@ -126,6 +149,14 @@ func (s streamWriter) Write(p []byte) (int, error) {
 		p = p[len(c):]
 	}
 	return n, nil
+}
+
+// IO connects a run to its caller.
+type IO struct {
+	Stdin          io.Reader   // read only if Spec.Stdin
+	Resize         <-chan Size // terminal size changes, if Spec.TTY
+	Stdout, Stderr io.Writer
+	Export         io.Writer // the filesystem sent back (see Spec.Export)
 }
 
 // ErrUnexpectedFrame is returned for frames that make no sense in context.

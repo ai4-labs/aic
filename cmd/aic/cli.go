@@ -66,6 +66,13 @@ func runWithInput(argv []string, stdin io.Reader, stdout, stderr io.Writer) int 
 	if err == nil {
 		return exitOK
 	}
+	var es exitStatus
+	if errors.As(err, &es) {
+		if es.err != nil {
+			fmt.Fprintf(stderr, "%s: %v\n", cmd.CommandPath(), es.err)
+		}
+		return es.code
+	}
 	fmt.Fprintf(stderr, "%s: %v\n", cmd.CommandPath(), err)
 	var ue usageError
 	if errors.As(err, &ue) || strings.HasPrefix(err.Error(), "unknown command") {
@@ -78,15 +85,15 @@ func runWithInput(argv []string, stdin io.Reader, stdout, stderr io.Writer) int 
 func newRootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:     "aic",
-		Short:   "Build container images from Dockerfiles",
-		Long:    "aic builds OCI images from Dockerfiles and pushes and pulls them to and from registries.",
+		Short:   "Build and run container images from Dockerfiles",
+		Long:    "aic builds OCI images from Dockerfiles, runs them in isolated containers, and pushes and pulls them to and from registries.",
 		Version: version(),
 		// Errors are printed by run, with the right exit code.
 		SilenceErrors: true,
 		SilenceUsage:  true,
 	}
 	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error { return usageError{err} })
-	root.AddCommand(newBuildCmd(), newImagesCmd(), newLoginCmd(), newLogoutCmd(), newPruneCmd(), newPullCmd(), newPushCmd(), newRmiCmd(), newTagCmd(), newVMCmd(), newVersionCmd())
+	root.AddCommand(newBuildCmd(), newImagesCmd(), newLoginCmd(), newLogoutCmd(), newPruneCmd(), newPullCmd(), newPushCmd(), newRmiCmd(), newRunCmd(), newTagCmd(), newVMCmd(), newVersionCmd())
 	return root
 }
 

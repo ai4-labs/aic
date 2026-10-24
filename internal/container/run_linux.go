@@ -56,6 +56,7 @@ const (
 	fdImage  = 4
 	fdExport = 5
 	fdStatus = 6
+	fdResize = 7
 )
 
 // Init runs the container child if this process is one. Call it first
@@ -72,9 +73,10 @@ func Init() {
 
 // Run runs spec in a container whose root filesystem is the tar stream
 // image (already flattened: no whiteouts). The command's output goes to
-// stdout and stderr; afterwards the container's root filesystem is
-// written to export as a tar stream, unless the command failed.
-func Run(ctx context.Context, spec proto.Spec, image io.Reader, stdout, stderr, export io.Writer) (proto.Result, error) {
+// rio.Stdout and rio.Stderr; afterwards the container's root filesystem
+// (or spec.Export) is written to rio.Export as a tar stream.
+func Run(ctx context.Context, spec proto.Spec, image io.Reader, rio proto.IO) (proto.Result, error) {
+	stdout, stderr, export := rio.Stdout, rio.Stderr, rio.Export
 	dir, err := os.MkdirTemp("", "aic-rootfs-")
 	if err != nil {
 		return proto.Result{}, err
@@ -117,6 +119,24 @@ func Run(ctx context.Context, spec proto.Spec, image io.Reader, stdout, stderr, 
 	if err != nil {
 		return proto.Result{}, err
 	}
+	resizeW, err := pipe(true)
+	if err != nil {
+		return proto.Result{}, err
+	}
+	var stdinR *os.File
+	if spec.Stdin && rio.Stdin != nil {
+		r, w, err := os.Pipe()
+		if err != nil {
+			return proto.Result{}, err
+		}
+		stdinR = r
+		defer r.Close()
+		go func() {
+			// Ends at EOF, or when the container is gone (EPIPE).
+			io.Copy(w, rio.Stdin)
+			w.Close()
+		}()
+	}
 
 	self, err := os.Executable()
 	if err != nil {
@@ -126,6 +146,9 @@ func Run(ctx context.Context, spec proto.Spec, image io.Reader, stdout, stderr, 
 	cmd.Args = []string{"aic-container-init"}
 	cmd.Env = []string{childEnv + "=1"}
 	cmd.Stdout, cmd.Stderr = stdout, stderr
+	if stdinR != nil {
+		cmd.Stdin = stdinR
+	}
 	cmd.ExtraFiles = childEnds
 	attr := &syscall.SysProcAttr{
 		Cloneflags: syscall.CLONE_NEWNS | syscall.CLONE_NEWPID | syscall.CLONE_NEWUTS | syscall.CLONE_NEWIPC,
@@ -177,6 +200,21 @@ func Run(ctx context.Context, spec proto.Spec, image io.Reader, stdout, stderr, 
 		// gone); its status says why.
 		io.Copy(imgW, image)
 		imgW.Close()
+	}()
+	resizeDone := make(chan struct{})
+	defer close(resizeDone)
+	go func() {
+		enc := json.NewEncoder(resizeW)
+		for {
+			select {
+			case s, ok := <-rio.Resize:
+				if !ok || enc.Encode(s) != nil {
+					return
+				}
+			case <-resizeDone:
+				return
+			}
+		}
 	}()
 	expDone := make(chan error, 1)
 	go func() {
