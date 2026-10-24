@@ -306,13 +306,14 @@ func TestRunStdinStaysOpen(t *testing.T) {
 		user string
 	}{{"pipe", false, ""}, {"tty", true, ""}, {"pipe user", false, "1000:1000"}, {"tty user", true, "1000:1000"}} {
 		t.Run(tc.name, func(t *testing.T) {
+			image := testImage(t) // may skip, which only works on the test's goroutine
 			pr, pw := io.Pipe()
 			defer pw.Close()
 			spec := proto.Spec{Args: []string{"helper"}, Env: []string{"AIC_TEST_HELPER=1", "MODE=id"}, Network: "none",
 				Stdin: true, TTY: tc.tty, User: tc.user, Size: proto.Size{Rows: 24, Cols: 80}}
 			done := make(chan string, 1)
 			go func() {
-				res, _, out := runSpec(t, spec, pr, testImage(t))
+				res, _, out := runSpec(t, spec, pr, image)
 				done <- fmt.Sprintf("%+v %q", res, out)
 			}()
 			select {
