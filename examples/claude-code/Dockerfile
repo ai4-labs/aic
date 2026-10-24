@@ -3,19 +3,23 @@
 #
 #   aic build -t claude-code examples/claude-code
 #   aic run -it -w . --network=host -e ANTHROPIC_API_KEY claude-code
-FROM node:22-slim
+FROM node:22-alpine
 
-RUN apt-get update \
- && apt-get install -y --no-install-recommends git ripgrep ca-certificates \
- && rm -rf /var/lib/apt/lists/*
+# Shells and the everyday tools Claude Code reaches for. Alpine's busybox
+# provides /bin/sh; bash and the GNU tools behave like on most machines.
+# Claude Code's bundled ripgrep is built for glibc, so use Alpine's.
+RUN apk add --no-cache \
+      bash coreutils findutils grep sed gawk diffutils patch less procps \
+      curl ca-certificates openssh-client git jq ripgrep \
+      tar gzip xz unzip make
+ENV SHELL=/bin/bash USE_BUILTIN_RIPGREP=0
 
 ARG CLAUDE_CODE_VERSION=latest
 RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
  && npm cache clean --force
 
 # Claude Code won't skip permission prompts as root.
-RUN useradd -m -s /bin/bash claude
+RUN adduser -D -s /bin/bash claude
 USER claude
-ENV USE_BUILTIN_RIPGREP=0
 WORKDIR /workspace
 ENTRYPOINT ["claude"]

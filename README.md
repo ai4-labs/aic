@@ -14,9 +14,8 @@ macOS it uses Apple's built-in virtualization directly.
 > to address over time.
 
 ```sh
-aic build -t hello examples/hello
-aic push hello registry.example.com/team/hello
-aic pull registry.example.com/team/hello:sha256-1c8cd8f6ca12a298bd0a6834318e69157f00f146c1fffee15bb96edb70da1eb2
+aic build -t claude-code examples/claude-code
+aic run -it -w . --network=host -e ANTHROPIC_API_KEY claude-code
 ```
 
 ## Install
