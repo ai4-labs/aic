@@ -254,7 +254,7 @@ func TestCLITagging(t *testing.T) {
 		t.Errorf("images:\n%s", stdout)
 	}
 
-	// The repository name alone finds its only image...
+	// The repository name alone finds its image...
 	srv := httptest.NewServer(registry.New())
 	defer srv.Close()
 	host := strings.TrimPrefix(srv.URL, "http://")
@@ -272,12 +272,19 @@ func TestCLITagging(t *testing.T) {
 		t.Errorf("push to :latest: %d %s", code, stderr)
 	}
 
-	// With two images in the repository, a tag is required.
+	// After a rebuild, the name alone refers to the newest image.
 	os.WriteFile(filepath.Join(dir, "other"), []byte("x"), 0o644)
 	os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte("FROM scratch\nCOPY other /\n"), 0o644)
-	runCLI(t, "build", "-q", "-t", "app", dir)
-	if code, _, stderr = runCLI(t, "push", "app", host+"/team/app"); code != exitError || !strings.Contains(stderr, "several images") {
-		t.Errorf("ambiguous push: %d %s", code, stderr)
+	_, stdout, _ = runCLI(t, "build", "-q", "-t", "app", dir)
+	newDigest := strings.TrimSpace(stdout)
+	if newDigest == digest {
+		t.Fatal("rebuild produced the same image")
+	}
+	if code, _, stderr = runCLI(t, "push", "-q", "app", host+"/team/app"); code != exitOK {
+		t.Fatalf("push after rebuild: %d %s", code, stderr)
+	}
+	if _, err := crane.Digest(host + "/team/app:sha256-" + strings.TrimPrefix(newDigest, "sha256:")); err != nil {
+		t.Errorf("pushed an older image: %v", err)
 	}
 }
 

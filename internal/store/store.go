@@ -152,15 +152,15 @@ func find(descs []v1.Descriptor, ref string) (desc *v1.Descriptor, byName string
 			}
 		}
 	}
-	// A name without a tag also matches the repository's only image.
+	// A name without a tag also matches the repository's newest image.
 	if !HasTag(ref) {
 		return findInRepo(descs, ref)
 	}
 	return nil, "", fmt.Errorf("%s: %w", ref, ErrNotFound)
 }
 
-// findInRepo finds the single image stored under any tag of ref's
-// repository.
+// findInRepo finds the image most recently stored under any tag of ref's
+// repository. Put appends to the index, so that is the last match.
 func findInRepo(descs []v1.Descriptor, ref string) (*v1.Descriptor, string, error) {
 	repos := map[string]bool{}
 	for _, parse := range []func(string) (name.Reference, error){
@@ -170,29 +170,13 @@ func findInRepo(descs []v1.Descriptor, ref string) (*v1.Descriptor, string, erro
 			repos[r.Context().Name()] = true
 		}
 	}
-	var found *v1.Descriptor
-	var names []string
-	ambiguous := false
-	for i, d := range descs {
-		n := d.Annotations[RefAnnotation]
-		r, err := name.ParseReference(n)
-		if n == "" || err != nil || !repos[r.Context().Name()] {
-			continue
-		}
-		names = append(names, n)
-		if found == nil {
-			found = &descs[i]
-		} else if found.Digest != d.Digest {
-			ambiguous = true
+	for i := len(descs) - 1; i >= 0; i-- {
+		n := descs[i].Annotations[RefAnnotation]
+		if r, err := name.ParseReference(n); n != "" && err == nil && repos[r.Context().Name()] {
+			return &descs[i], n, nil
 		}
 	}
-	switch {
-	case found == nil:
-		return nil, "", fmt.Errorf("%s: %w", ref, ErrNotFound)
-	case ambiguous:
-		return nil, "", fmt.Errorf("%s has several images; specify one of: %s", ref, strings.Join(names, ", "))
-	}
-	return found, found.Annotations[RefAnnotation], nil
+	return nil, "", fmt.Errorf("%s: %w", ref, ErrNotFound)
 }
 
 // HasTag reports whether an image name includes a tag or a digest.

@@ -64,8 +64,9 @@ aic version
 
 aic never uses the `latest` tag: a name without a tag (`-t hello`, or a push
 destination like `ghcr.io/org/hello`) is tagged `sha256-<image digest>`, and
-`:latest` is rejected. A name without a tag also refers to a repository's only
-local image, so `aic push hello ghcr.io/org/hello` works after `-t hello`.
+`:latest` is rejected. A name without a tag also refers to the repository's
+newest local image, so after `aic build -t hello`, `aic run hello` and
+`aic push hello ghcr.io/org/hello` use what you just built.
 
 Flags may come before or after positional arguments (for `aic run`, only
 before IMAGE). Shell completion: `aic completion bash|zsh|fish|powershell`.
