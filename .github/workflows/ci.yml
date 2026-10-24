@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -29,5 +30,10 @@ jobs:
         run: go vet ./... && GOOS=linux go vet ./...
       - name: test
         run: go test -race ./...
+      - name: container tests
+        # -race needs cgo, which makes the test binary dynamic; these tests
+        # run it inside a bare image, so build it static.
+        if: runner.os == 'Linux'
+        run: CGO_ENABLED=0 go test -v -run 'TestRun' ./internal/container/
       - name: build
         run: make && ./aic version

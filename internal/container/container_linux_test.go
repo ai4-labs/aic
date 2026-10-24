@@ -6,6 +6,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"debug/elf"
 	"errors"
 	"fmt"
 	"io"
@@ -38,6 +39,9 @@ func helper() int {
 		}
 	}
 	fmt.Printf("interfaces up=%d\n", up)
+	if b, err := os.ReadFile("/proc/self/stat"); err == nil {
+		fmt.Printf("procpid=%s getpid=%d\n", strings.Fields(string(b))[0], os.Getpid())
+	}
 	if err := os.WriteFile("/new", []byte("new"), 0o644); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -68,6 +72,14 @@ func testImage(t *testing.T) []byte {
 	self, err := os.ReadFile("/proc/self/exe")
 	if err != nil {
 		t.Fatal(err)
+	}
+	// The test binary runs inside a bare image, so it must be static.
+	if f, err := elf.NewFile(bytes.NewReader(self)); err == nil {
+		for _, p := range f.Progs {
+			if p.Type == elf.PT_INTERP {
+				t.Skip("the test binary is dynamically linked (e.g. -race); run with CGO_ENABLED=0")
+			}
+		}
 	}
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
