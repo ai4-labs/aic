@@ -203,3 +203,24 @@ func TestCLILoginPushLogout(t *testing.T) {
 		t.Errorf("logout --all = %d %q", code, stdout)
 	}
 }
+
+func TestCLICacheAndPrune(t *testing.T) {
+	t.Setenv("AIC_STORE", t.TempDir())
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte("FROM scratch\nCOPY Dockerfile /\n"), 0o644)
+	if code, _, stderr := runCLI(t, "build", dir); code != exitOK || strings.Contains(stderr, "Using cache") {
+		t.Fatalf("first build: %d %s", code, stderr)
+	}
+	if _, _, stderr := runCLI(t, "build", dir); !strings.Contains(stderr, "Using cache") {
+		t.Errorf("second build did not use the cache:\n%s", stderr)
+	}
+	if _, _, stderr := runCLI(t, "build", "--no-cache", dir); strings.Contains(stderr, "Using cache") {
+		t.Errorf("--no-cache used the cache:\n%s", stderr)
+	}
+	if code, stdout, _ := runCLI(t, "prune"); code != exitOK || stdout != "Removed 1 build cache entries\n" {
+		t.Errorf("prune = %d %q", code, stdout)
+	}
+	if _, _, stderr := runCLI(t, "build", dir); strings.Contains(stderr, "Using cache") {
+		t.Errorf("build after prune used the cache:\n%s", stderr)
+	}
+}

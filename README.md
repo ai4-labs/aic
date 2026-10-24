@@ -20,6 +20,9 @@ aic pull registry.example.com/team/hello:1
   - on macOS, in a small Linux VM that aic boots in about a second.
 - `RUN` shares the host's network (on macOS, the VM's). Use
   `RUN --network=none` to isolate a step.
+- Steps are cached like Docker's: a step reruns only if it, its inputs (files
+  for `COPY`/`ADD`; command, environment and user for `RUN`) or an earlier step
+  changed. `--no-cache` skips the cache; `aic prune` clears it.
 - Images are kept in `~/.aic/store`. Log in to registries with `aic login`.
 
 ## Commands
@@ -32,11 +35,13 @@ aic build [flags] [CONTEXT]      build CONTEXT/Dockerfile (default context: .)
   --target STAGE                 build up to this stage
   --platform OS/ARCH[/VARIANT]   target platform (default linux/<host arch>)
   --pull                         always pull base images
+  --no-cache                     run every step instead of using the build cache
   -q, --quiet                    print only the image digest
 
 aic login [-u USER] [--password-stdin] REGISTRY   log in (credentials are verified first)
 aic logout [-a] [REGISTRY]       remove credentials saved by aic login
 aic images [-q] [--no-trunc]     list local images
+aic prune                        remove the build cache
 aic rmi [-f] [-a] IMAGE...       remove images (a name untags; an ID removes all its names)
 aic vm start|stop|status|logs|rm   manage the macOS build VM (see below)
 aic pull [--platform OS/ARCH] IMAGE
@@ -101,7 +106,6 @@ or an AppArmor profile for aic.
 
 ## Limitations
 
-- No build cache yet: every build runs every step.
 - Each `RUN` unpacks the full image so far into a tmpfs, so memory bounds
   how large an image can be built (on macOS, the VM's memory).
 - The macOS VM is arm64 only (Apple silicon), and `RUN` uses the host's

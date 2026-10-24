@@ -86,7 +86,7 @@ func newRootCmd() *cobra.Command {
 		SilenceUsage:  true,
 	}
 	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error { return usageError{err} })
-	root.AddCommand(newBuildCmd(), newImagesCmd(), newLoginCmd(), newLogoutCmd(), newPullCmd(), newPushCmd(), newRmiCmd(), newVMCmd(), newVersionCmd())
+	root.AddCommand(newBuildCmd(), newImagesCmd(), newLoginCmd(), newLogoutCmd(), newPruneCmd(), newPullCmd(), newPushCmd(), newRmiCmd(), newVMCmd(), newVersionCmd())
 	return root
 }
 
@@ -167,6 +167,7 @@ type buildOptions struct {
 	target    string
 	platform  string
 	pull      bool
+	noCache   bool
 	quiet     bool
 }
 
@@ -201,6 +202,7 @@ isolate a step.`,
 	f.StringVar(&o.target, "target", "", "build up to this `stage`")
 	f.StringVar(&o.platform, "platform", "", "target platform `OS/ARCH[/VARIANT]` (default linux/<host arch>)")
 	f.BoolVar(&o.pull, "pull", false, "always pull base images, even if present locally")
+	f.BoolVar(&o.noCache, "no-cache", false, "run every step instead of using the build cache")
 	f.BoolVarP(&o.quiet, "quiet", "q", false, "print only the image digest")
 	return cmd
 }
@@ -265,6 +267,7 @@ func runBuild(cmd *cobra.Command, contextDir string, o buildOptions) error {
 		Target:     o.target,
 		Platform:   plat,
 		Pull:       o.pull,
+		NoCache:    o.noCache,
 		Created:    created,
 		Store:      st,
 		NewExecutor: func() (executor.Executor, error) {

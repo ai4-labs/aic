@@ -183,3 +183,25 @@ is required. Layers no longer used by any image are deleted.`,
 	cmd.Flags().BoolVarP(&force, "force", "f", false, "remove an image by ID even if it has several names")
 	return cmd
 }
+
+func newPruneCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "prune",
+		Short: "Remove the build cache",
+		Long: `Remove the build cache: the recorded results of build steps, and the
+layers no image uses. The next build runs every step again.`,
+		Args: args(cobra.NoArgs),
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			st, err := openStore()
+			if err != nil {
+				return err
+			}
+			n, err := st.PruneCache()
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "Removed %d build cache entries\n", n)
+			return nil
+		},
+	}
+}

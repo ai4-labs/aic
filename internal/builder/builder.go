@@ -48,6 +48,9 @@ type Options struct {
 	Platform v1.Platform
 	// Pull always pulls base images instead of using the local store.
 	Pull bool
+	// NoCache runs every step instead of reusing results from the build
+	// cache. Results are still recorded.
+	NoCache bool
 	// Created is the image creation time. Default: now.
 	Created time.Time
 
@@ -104,6 +107,8 @@ type stage struct {
 	config   v1.Config
 	author   string
 	tree     *rootfs.Tree // built on first use
+	treeN    int          // how many of layers tree reflects
+	key      string       // build cache key of the state so far
 	args     map[string]*string
 	cmdSet   bool
 }
@@ -426,6 +431,7 @@ func (b *builder) from(ctx context.Context, d stageDef) (*stage, error) {
 	if strings.EqualFold(ref, "scratch") {
 		s.base = mutate.ConfigMediaType(mutate.MediaType(empty.Image, types.OCIManifestSchema1), types.OCIConfigJSON)
 		s.layerMT = types.OCILayer
+		s.key = chainKey("scratch", platformString(platform))
 		return s, nil
 	}
 	for _, prev := range b.stages[:d.index] {
@@ -441,6 +447,11 @@ func (b *builder) from(ctx context.Context, d stageDef) (*stage, error) {
 	if err := s.setBase(img); err != nil {
 		return nil, err
 	}
+	digest, err := img.Digest()
+	if err != nil {
+		return nil, err
+	}
+	s.key = chainKey("image", digest.String(), platformString(platform))
 	if len(s.config.OnBuild) > 0 {
 		b.say("[Warning] ignoring %d ONBUILD trigger(s) from %s", len(s.config.OnBuild), ref)
 		s.config.OnBuild = nil
@@ -480,8 +491,9 @@ func (s *stage) inherit(prev *stage) {
 	cf := &v1.ConfigFile{Config: prev.config}
 	s.config = cf.DeepCopy().Config
 	s.author = prev.author
+	s.key = prev.key
 	if prev.tree != nil {
-		s.tree = prev.tree.Clone()
+		s.tree, s.treeN = prev.tree.Clone(), prev.treeN
 	}
 }
 
@@ -536,22 +548,20 @@ func (s *stage) image(created v1.Time) (v1.Image, error) {
 }
 
 func (b *builder) ensureTree(s *stage) error {
-	if s.tree != nil {
-		return nil
+	if s.tree == nil {
+		s.tree, s.treeN = rootfs.New(), 0
 	}
-	t := rootfs.New()
-	for i, l := range s.layers {
-		rc, err := l.Uncompressed()
+	for ; s.treeN < len(s.layers); s.treeN++ {
+		rc, err := s.layers[s.treeN].Uncompressed()
 		if err != nil {
 			return err
 		}
-		err = t.Apply(rc, i)
+		err = s.tree.Apply(rc, s.treeN)
 		rc.Close()
 		if err != nil {
-			return fmt.Errorf("reading layer %d: %w", i, err)
+			return fmt.Errorf("reading layer %d: %w", s.treeN, err)
 		}
 	}
-	s.tree = t
 	return nil
 }
 
@@ -637,6 +647,7 @@ func (b *builder) dispatch(ctx context.Context, s *stage, ins *dockerfile.Instru
 			}
 			s.args[k] = val
 		}
+		s.argsKey()
 		return nil // ARG leaves no trace in the image
 	case "env", "label":
 		vals := make([]string, len(ins.Args))
@@ -672,10 +683,8 @@ func (b *builder) dispatch(ctx context.Context, s *stage, ins *dockerfile.Instru
 			w = path.Join(cur, w)
 		}
 		s.config.WorkingDir = path.Clean(w)
-		if err := b.mkWorkdir(s, ins); err != nil {
-			return err
-		}
-		return nil
+		s.configKey()
+		return b.mkWorkdir(s, ins)
 	case "user":
 		u, err := b.word(s, ins.Args[0])
 		if err != nil {
@@ -745,6 +754,7 @@ func (b *builder) dispatch(ctx context.Context, s *stage, ins *dockerfile.Instru
 		return fmt.Errorf("unexpected instruction")
 	}
 	s.adds = append(s.adds, mutate.Addendum{History: b.history(ins, true)})
+	s.configKey()
 	return nil
 }
 
@@ -835,27 +845,26 @@ func healthcheck(ins *dockerfile.Instruction) (*v1.HealthConfig, error) {
 
 // mkWorkdir creates the working directory in a new layer if it is missing.
 func (b *builder) mkWorkdir(s *stage, ins *dockerfile.Instruction) error {
-	if err := b.ensureTree(s); err != nil {
-		return err
-	}
-	dir, err := s.tree.Resolve(s.config.WorkingDir, true)
-	if err != nil {
-		return err
-	}
-	if e, ok := s.tree.Get(dir); ok {
-		if !e.IsDir() {
-			return fmt.Errorf("%s exists and is not a directory", s.config.WorkingDir)
-		}
-		s.adds = append(s.adds, mutate.Addendum{History: b.history(ins, true)})
+	key := chainKey(s.key, "mkdir", s.config.WorkingDir)
+	if b.fromCache(s, key) {
 		return nil
 	}
 	lw, err := b.newLayer(s)
 	if err != nil {
 		return err
 	}
+	dir, err := s.tree.Resolve(s.config.WorkingDir, true)
+	if err != nil {
+		lw.abort()
+		return err
+	}
+	if e, ok := s.tree.Get(dir); ok && !e.IsDir() {
+		lw.abort()
+		return fmt.Errorf("%s exists and is not a directory", s.config.WorkingDir)
+	}
 	if err := lw.mkdirAll(dir, 0, 0, b.created.Time); err != nil {
 		lw.abort()
 		return err
 	}
-	return b.commit(s, lw, ins)
+	return b.commit(s, lw, ins, key)
 }

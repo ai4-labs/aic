@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/rakyll/ai-container/internal/dockerfile"
@@ -66,6 +67,18 @@ func (b *builder) run(ctx context.Context, s *stage, ins *dockerfile.Instruction
 	if !ins.JSON {
 		argv = append(append([]string{}, s.shell()...), ins.Args[0])
 	}
+	env := s.runEnv()
+	sortedEnv := append([]string(nil), env...)
+	sort.Strings(sortedEnv)
+	key := chainKey(s.key, "run", mustJSON(struct {
+		Args             []string
+		Env              []string
+		WorkDir, User    string
+		Network, LayerMT string
+	}{argv, sortedEnv, s.config.WorkingDir, s.config.User, network, string(s.layerMT)}))
+	if b.fromCache(s, key) {
+		return nil
+	}
 	exe, err := b.executor()
 	if err != nil {
 		return err
@@ -89,7 +102,7 @@ func (b *builder) run(ctx context.Context, s *stage, ins *dockerfile.Instruction
 	err = exe.Run(ctx, executor.Spec{
 		Image:   img,
 		Args:    argv,
-		Env:     s.runEnv(),
+		Env:     env,
 		WorkDir: s.config.WorkingDir,
 		User:    s.config.User,
 		Network: network,
@@ -132,7 +145,7 @@ func (b *builder) run(ctx context.Context, s *stage, ins *dockerfile.Instruction
 		lw.abort()
 		return err
 	}
-	return b.commit(s, lw, ins)
+	return b.commit(s, lw, ins, key)
 }
 
 func writeDiff(lw *layerWriter, export *os.File, include map[string]bool, deleted []string) error {

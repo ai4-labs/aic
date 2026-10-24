@@ -2,13 +2,18 @@ package builder
 
 import (
 	"archive/tar"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"hash"
 	"io"
 	"os"
 	"path"
+	"sort"
 	"strings"
 	"time"
 
+	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
 
@@ -24,6 +29,7 @@ type layerWriter struct {
 	written map[string]bool
 	count   int
 	mtime   time.Time
+	sum     hash.Hash // over entries without times; see contentKey
 }
 
 func (b *builder) newLayer(s *stage) (*layerWriter, error) {
@@ -34,7 +40,7 @@ func (b *builder) newLayer(s *stage) (*layerWriter, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &layerWriter{f: f, tw: tar.NewWriter(f), tree: s.tree, written: map[string]bool{}, mtime: b.created.Time}, nil
+	return &layerWriter{f: f, tw: tar.NewWriter(f), tree: s.tree, written: map[string]bool{}, mtime: b.created.Time, sum: sha256.New()}, nil
 }
 
 // exists reports whether p is a directory, either already in the image
@@ -78,8 +84,9 @@ func (w *layerWriter) write(hdr *tar.Header, r io.Reader) error {
 	if err := w.tw.WriteHeader(hdr); err != nil {
 		return err
 	}
+	w.hashHeader(hdr)
 	if r != nil && hdr.Typeflag == tar.TypeReg {
-		n, err := io.Copy(w.tw, r)
+		n, err := io.Copy(io.MultiWriter(w.tw, w.sum), r)
 		if err != nil {
 			return err
 		}
@@ -97,9 +104,11 @@ func (w *layerWriter) write(hdr *tar.Header, r io.Reader) error {
 // whiteout records the deletion of p.
 func (w *layerWriter) whiteout(p string) error {
 	dir, base := path.Split(p)
-	if err := w.tw.WriteHeader(&tar.Header{Typeflag: tar.TypeReg, Name: dir + ".wh." + base, ModTime: w.mtime, Format: tar.FormatPAX}); err != nil {
+	hdr := &tar.Header{Typeflag: tar.TypeReg, Name: dir + ".wh." + base, ModTime: w.mtime, Format: tar.FormatPAX}
+	if err := w.tw.WriteHeader(hdr); err != nil {
 		return err
 	}
+	w.hashHeader(hdr)
 	w.count++
 	return nil
 }
@@ -109,35 +118,64 @@ func (w *layerWriter) abort() {
 	os.Remove(w.f.Name())
 }
 
-// commit closes the layer and appends it to the stage. A layer with no
-// entries is recorded as an empty history entry instead.
-func (b *builder) commit(s *stage, w *layerWriter, ins *dockerfile.Instruction) error {
+// finish closes the layer and returns it, or nil if it has no entries.
+func (b *builder) finish(s *stage, w *layerWriter) (v1.Layer, error) {
 	if err := w.tw.Close(); err != nil {
 		w.abort()
-		return err
+		return nil, err
 	}
 	if err := w.f.Close(); err != nil {
-		return err
+		return nil, err
 	}
 	if w.count == 0 {
 		os.Remove(w.f.Name())
-		s.adds = append(s.adds, mutate.Addendum{History: b.history(ins, true)})
-		return nil
+		return nil, nil
 	}
-	layer, err := tarball.LayerFromFile(w.f.Name(), tarball.WithMediaType(s.layerMT))
-	if err != nil {
-		return err
-	}
-	f, err := os.Open(w.f.Name())
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	idx := len(s.layers)
-	if err := s.tree.Apply(f, idx); err != nil {
-		return err
+	return tarball.LayerFromFile(w.f.Name(), tarball.WithMediaType(s.layerMT))
+}
+
+// appendLayer adds a layer to the stage, or just a history entry if
+// layer is nil. The filesystem index catches up lazily (ensureTree).
+func (s *stage) appendLayer(layer v1.Layer, h v1.History) {
+	h.EmptyLayer = layer == nil
+	if layer == nil {
+		s.adds = append(s.adds, mutate.Addendum{History: h})
+		return
 	}
 	s.layers = append(s.layers, layer)
-	s.adds = append(s.adds, mutate.Addendum{Layer: layer, History: b.history(ins, false), MediaType: s.layerMT})
+	s.adds = append(s.adds, mutate.Addendum{Layer: layer, History: h, MediaType: s.layerMT})
+}
+
+// commit finishes the layer of the step with cache key key, appends it
+// to the stage and records it in the build cache.
+func (b *builder) commit(s *stage, w *layerWriter, ins *dockerfile.Instruction, key string) error {
+	layer, err := b.finish(s, w)
+	if err != nil {
+		return err
+	}
+	h := b.history(ins, layer == nil)
+	s.appendLayer(layer, h)
+	s.key = key
+	b.toCache(key, layer, h)
 	return nil
 }
+
+// hashHeader adds an entry's metadata, except times, to the content key.
+func (w *layerWriter) hashHeader(hdr *tar.Header) {
+	fmt.Fprintf(w.sum, "%q %c %o %d %d %q %d %d %d", hdr.Name, hdr.Typeflag, hdr.Mode, hdr.Uid, hdr.Gid, hdr.Linkname, hdr.Size, hdr.Devmajor, hdr.Devminor)
+	keys := make([]string, 0, len(hdr.PAXRecords))
+	for k := range hdr.PAXRecords {
+		if strings.HasPrefix(k, "SCHILY.xattr.") {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		fmt.Fprintf(w.sum, " %q=%q", k, hdr.PAXRecords[k])
+	}
+	w.sum.Write([]byte{'\n'})
+}
+
+// contentKey identifies what the layer writes, ignoring modification
+// times: same files and metadata, same key.
+func (w *layerWriter) contentKey() string { return hex.EncodeToString(w.sum.Sum(nil)) }

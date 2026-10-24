@@ -187,7 +187,14 @@ func (b *builder) copy(ctx context.Context, s *stage, ins *dockerfile.Instructio
 		lw.abort()
 		return err
 	}
-	return b.commit(s, lw, ins)
+	// The key covers exactly what the layer contains, so unchanged
+	// sources reuse the cached layer and keep later steps cached.
+	key := chainKey(s.key, ins.Cmd, lw.contentKey(), string(s.layerMT))
+	if b.fromCache(s, key) {
+		lw.abort()
+		return nil
+	}
+	return b.commit(s, lw, ins, key)
 }
 
 // copyInto plans and writes the items of one COPY/ADD.

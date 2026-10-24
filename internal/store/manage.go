@@ -212,10 +212,14 @@ func (s *Store) writeIndex(im *v1.IndexManifest) error {
 	return os.Rename(tmp.Name(), filepath.Join(s.dir, "index.json"))
 }
 
-// gc deletes blobs not referenced by any image in im. It must run with
+// gc deletes blobs not referenced by any image in im or by the build
+// cache. It must run with
 // the store locked, so no write is in progress.
 func (s *Store) gc(im *v1.IndexManifest) error {
-	keep := map[string]bool{}
+	keep, err := s.cachedBlobs() // layers the build cache refers to
+	if err != nil {
+		return err
+	}
 	for _, d := range im.Manifests {
 		keep[d.Digest.Hex] = true
 		img, err := s.lp.Image(d.Digest)

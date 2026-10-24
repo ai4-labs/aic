@@ -550,3 +550,107 @@ func TestErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildCache(t *testing.T) {
+	e := newEnv(t, map[string]string{
+		"Dockerfile": `FROM scratch
+COPY base.txt /
+ARG MODE=dev
+RUN step-one
+COPY app.txt /app/
+RUN step-two
+WORKDIR /work
+`,
+		"base.txt": "base",
+		"app.txt":  "v1",
+	})
+	runs := 0
+	fe := &fakeExec{fn: func(fs *memFS, args []string) {
+		runs++
+		fs.write("out-"+args[len(args)-1], "x", 0o644)
+	}}
+	e.exec = fe
+	build := func(opts Options) (v1.Hash, int, string) {
+		t.Helper()
+		runs = 0
+		e.out.Reset()
+		d, _ := e.mustBuild(opts).Digest()
+		return d, runs, e.out.String()
+	}
+
+	d1, n, _ := build(Options{})
+	if n != 2 {
+		t.Fatalf("first build ran %d steps, want 2", n)
+	}
+	d2, n, out := build(Options{})
+	if n != 0 || strings.Count(out, "Using cache") != 5 {
+		t.Errorf("second build ran %d steps, output:\n%s", n, out)
+	}
+	if d1 != d2 {
+		t.Errorf("cached build digest %s != %s", d2, d1)
+	}
+
+	// Touching a file without changing it keeps the cache.
+	future := time.Now().Add(time.Hour)
+	os.Chtimes(filepath.Join(e.ctx, "app.txt"), future, future)
+	if d, n, _ := build(Options{}); n != 0 || d != d1 {
+		t.Errorf("after touch: ran %d steps, digest changed: %v", n, d != d1)
+	}
+
+	// Changing app.txt reruns only what comes after its COPY.
+	writeFiles(t, e.ctx, map[string]string{"app.txt": "v2"})
+	if _, n, out := build(Options{}); n != 1 || !strings.Contains(out, "STEP 6/7: RUN step-two") {
+		t.Errorf("after edit: ran %d steps, want 1\n%s", n, out)
+	} else if got := flatten(t, e.mustBuild(Options{}))["app/app.txt"].body; got != "v2" {
+		t.Errorf("app.txt = %q", got)
+	}
+
+	// A different build arg value changes what RUN sees.
+	if _, n, _ := build(Options{BuildArgs: map[string]string{"MODE": "prod"}}); n != 2 {
+		t.Errorf("with MODE=prod: ran %d steps, want 2", n)
+	}
+
+	// --no-cache runs everything; pruning empties the cache.
+	if _, n, _ := build(Options{NoCache: true}); n != 2 {
+		t.Errorf("NoCache: ran %d steps, want 2", n)
+	}
+	if _, err := e.store.PruneCache(); err != nil {
+		t.Fatal(err)
+	}
+	if _, n, _ := build(Options{}); n != 2 {
+		t.Errorf("after prune: ran %d steps, want 2", n)
+	}
+}
+
+func TestBuildCacheMultiStage(t *testing.T) {
+	e := newEnv(t, map[string]string{
+		"Dockerfile": `FROM scratch AS build
+COPY src.txt /
+RUN compile
+FROM scratch
+COPY --from=build /out-compile /bin/app
+`,
+		"src.txt": "1",
+	})
+	runs := 0
+	e.exec = &fakeExec{fn: func(fs *memFS, args []string) {
+		runs++
+		src := fs.ents["src.txt"]
+		fs.write("out-compile", "built from "+string(src.body), 0o755)
+	}}
+	e.mustBuild(Options{})
+	runs = 0
+	img := e.mustBuild(Options{})
+	if runs != 0 {
+		t.Errorf("rebuild ran %d steps", runs)
+	}
+	// The cached layer still serves COPY --from (the stage's index is
+	// rebuilt from cached layers).
+	if got := flatten(t, img)["bin/app"].body; got != "built from 1" {
+		t.Errorf("bin/app = %q", got)
+	}
+	writeFiles(t, e.ctx, map[string]string{"src.txt": "2"})
+	if got := flatten(t, e.mustBuild(Options{}))["bin/app"].body; got != "built from 2" || runs != 1 {
+		t.Errorf("after edit: bin/app = %q, runs %d", got, runs)
+	}
+}
