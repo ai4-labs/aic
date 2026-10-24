@@ -163,6 +163,9 @@ func runRun(cmd *cobra.Command, imageName string, command []string, o runOptions
 		}
 		env = append(env, e)
 	}
+	if o.tty {
+		env = terminalEnv(env)
+	}
 	spec := executor.Spec{
 		Image:   img,
 		Args:    args,
@@ -312,4 +315,29 @@ func (c crlfWriter) Write(p []byte) (int, error) {
 		return 0, err
 	}
 	return len(p), nil
+}
+
+// terminalEnv adds the host's terminal type to env, unless the image or
+// -e set it: without TERM, programs assume a dumb terminal and don't use
+// colors.
+func terminalEnv(env []string) []string {
+	has := func(k string) bool {
+		for _, e := range env {
+			if strings.HasPrefix(e, k+"=") {
+				return true
+			}
+		}
+		return false
+	}
+	if !has("TERM") {
+		t := os.Getenv("TERM")
+		if t == "" || t == "dumb" {
+			t = "xterm-256color"
+		}
+		env = append(env, "TERM="+t)
+	}
+	if v, ok := os.LookupEnv("COLORTERM"); ok && !has("COLORTERM") {
+		env = append(env, "COLORTERM="+v)
+	}
+	return env
 }
