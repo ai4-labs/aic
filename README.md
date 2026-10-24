@@ -88,11 +88,13 @@ your machine:
 aic run alpine:3.20 echo hello
 aic run -it python:3.12 python                 # interactive, on a terminal
 aic run -w . python:3.12 python -m pytest      # with a copy of the current directory
+aic run -w . --copy-back python:3.12 ruff format .   # ...and keep its changes
 aic run -w .:/src --network=host golang:1.26 go build ./...
 ```
 
 ```
-  -w, --workspace DIR[:PATH]   copy DIR into the container at PATH (default /workspace) and copy changes back
+  -w, --workspace DIR[:PATH]   copy DIR into the container at PATH (default /workspace)
+  --copy-back                  copy the container's changes to the workspace back to DIR when it exits
   --network none|host          none (default): loopback only; host: the host's network (on macOS, the VM's)
   -i, --interactive            connect standard input
   -t, --tty                    run on a terminal
@@ -104,8 +106,9 @@ aic run -w .:/src --network=host golang:1.26 go build ./...
 
 - The container sees no host files and, by default, has no network.
 - With `-w`, DIR is copied in before the command starts and owned by the
-  command's user. When the command exits, whatever its exit status, new,
-  changed and deleted files are copied back to DIR. Files you edit on the
+  command's user; the container works on its copy and DIR is never changed.
+- With `--copy-back`, new, changed and deleted files are copied back to DIR
+  when the command exits, whatever its exit status. Files you edit on the
   host meanwhile are kept unless the container changed them too. If the
   container removes the workspace directory itself, nothing is copied back.
 - The image is pulled if it isn't in the store. The container is removed
@@ -124,13 +127,16 @@ without permission prompts:
 aic build -t claude-code examples/claude-code
 export ANTHROPIC_API_KEY=sk-ant-...
 
-# Interactive session on the current directory.
-aic run -it -w . --network=host -e ANTHROPIC_API_KEY claude-code
+# Interactive session on the current directory; its changes come back.
+aic run -it -w . --copy-back --network=host -e ANTHROPIC_API_KEY claude-code
 
 # Headless: make a change, then review it with git diff.
-aic run -w . --network=host -e ANTHROPIC_API_KEY claude-code \
+aic run -w . --copy-back --network=host -e ANTHROPIC_API_KEY claude-code \
   -p "make the failing tests pass" --dangerously-skip-permissions
 git diff
+
+# Read-only: ask about the code; nothing comes back.
+aic run -w . --network=host -e ANTHROPIC_API_KEY claude-code -p "explain the build"
 ```
 
 Claude Code needs the network to reach the API (`--network=host`; on macOS

@@ -45,6 +45,7 @@ func TestCLIUsage(t *testing.T) {
 		{[]string{"run", "-w", "/does/not/exist", "x"}, exitUsage, "no such file"},
 		{[]string{"run", "-w", ".:/", "x"}, exitUsage, "invalid workspace path"},
 		{[]string{"run", "-it", "x"}, exitUsage, "needs a terminal"},
+		{[]string{"run", "--copy-back", "x"}, exitUsage, "needs a workspace"},
 		{[]string{"run", "127.0.0.1:1/x:1"}, exitRunFailed, "127.0.0.1:1"},
 	} {
 		code, stdout, stderr := runCLI(t, tc.args...)

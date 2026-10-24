@@ -51,6 +51,7 @@ type runOptions struct {
 	user        string
 	workdir     string
 	workspace   string
+	copyBack    bool
 	network     string
 	platform    string
 }
@@ -64,16 +65,19 @@ func newRunCmd() *cobra.Command {
 
 The container has no network unless --network=host is given, and no
 access to host files. With -w, a host directory is copied into the
-container before the command runs, and the container's changes to it
-(new, modified and deleted files) are copied back when it exits, whatever
-its exit status. Files edited on the host in the meantime are kept unless
-the container changed them too.
+container before the command runs; the container works on its copy.
+
+With --copy-back, the container's changes to the workspace (new, modified
+and deleted files) are copied back to the host directory when it exits,
+whatever its exit status. Files edited on the host in the meantime are
+kept unless the container changed them too.
 
 aic exits with the command's exit status, 125 if the command could not be
 run, or 127 if it was not found.`,
 		Example: `  aic run alpine:3.20 echo hello
   aic run -it python:3.12 python
   aic run -w . python:3.12 python -m pytest
+  aic run -w . --copy-back python:3.12 ruff format .
   aic run -w .:/src --network=host golang:1.26 go build ./...`,
 		Args: args(cobra.MinimumNArgs(1)),
 		RunE: func(cmd *cobra.Command, a []string) error {
@@ -99,7 +103,8 @@ run, or 127 if it was not found.`,
 	f.StringArrayVarP(&o.env, "env", "e", nil, "set an environment variable `KEY[=VALUE]` (KEY alone takes the host's value); repeatable")
 	f.StringVarP(&o.user, "user", "u", "", "run as `USER[:GROUP]` (default: the image's user)")
 	f.StringVar(&o.workdir, "workdir", "", "working `DIR` in the container (default: the workspace, else the image's)")
-	f.StringVarP(&o.workspace, "workspace", "w", "", "copy host `DIR[:PATH]` into the container at PATH (default /workspace) and copy changes back")
+	f.StringVarP(&o.workspace, "workspace", "w", "", "copy host `DIR[:PATH]` into the container at PATH (default /workspace)")
+	f.BoolVar(&o.copyBack, "copy-back", false, "copy the container's changes to the workspace back to DIR when it exits")
 	f.StringVar(&o.network, "network", "none", "network `MODE`: none (isolated) or host")
 	f.StringVar(&o.platform, "platform", "", "image platform `OS/ARCH[/VARIANT]` (default linux/<host arch>)")
 	return cmd
@@ -114,6 +119,9 @@ func runRun(cmd *cobra.Command, imageName string, command []string, o runOptions
 		return err
 	}
 	var hostDir, wsPath string
+	if o.copyBack && o.workspace == "" {
+		return usagef("--copy-back needs a workspace (-w DIR)")
+	}
 	if o.workspace != "" {
 		hostDir, wsPath, err = parseWorkspace(o.workspace)
 		if err != nil {
@@ -233,7 +241,7 @@ func runRun(cmd *cobra.Command, imageName string, command []string, o runOptions
 	// The executor writes the container's copy of the workspace here.
 	var export io.Writer // nil: nothing comes back
 	var exportFile *os.File
-	if hostDir != "" {
+	if o.copyBack {
 		exportFile, err = os.CreateTemp("", "aic-workspace-*.tar")
 		if err != nil {
 			return err

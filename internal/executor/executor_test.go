@@ -106,3 +106,23 @@ func TestRunWorkspaceError(t *testing.T) {
 		}
 	}
 }
+
+// Without a writer for the result, the workspace is copied in but nothing
+// is sent back.
+func TestRunWorkspaceNoCopyBack(t *testing.T) {
+	var got proto.Spec
+	fn := func(_ context.Context, spec proto.Spec, image io.Reader, _ proto.IO) (proto.Result, error) {
+		got = spec
+		io.Copy(io.Discard, image)
+		return proto.Result{}, nil
+	}
+	ws := &Workspace{Path: "/w", Write: func(tw *tar.Writer, prefix string) error {
+		return tw.WriteHeader(&tar.Header{Name: prefix, Typeflag: tar.TypeDir, Mode: 0o755})
+	}}
+	if err := run(context.Background(), fn, Spec{Image: empty.Image, Workspace: ws}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got.Export != "" || !got.NoExport || got.Chown != "/w" {
+		t.Errorf("spec = %+v, want no export and the workspace chowned", got)
+	}
+}

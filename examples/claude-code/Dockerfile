@@ -2,7 +2,7 @@
 # but nothing else on your machine.
 #
 #   aic build -t claude-code examples/claude-code
-#   aic run -it -w . --network=host -e ANTHROPIC_API_KEY claude-code
+#   aic run -it -w . --copy-back --network=host -e ANTHROPIC_API_KEY claude-code
 FROM node:22-alpine
 
 # Shells and the everyday tools Claude Code reaches for. Alpine's busybox

@@ -52,8 +52,8 @@ type Spec struct {
 
 	// Workspace, if set, is copied into the container before the
 	// command runs. Afterwards only the workspace, rather than the root
-	// filesystem, is written to Run's rootfs writer, with names
-	// relative to it; this happens whatever the command's exit status.
+	// filesystem, is written to Run's rootfs writer (if not nil), with
+	// names relative to it; this happens whatever the exit status.
 	Workspace *Workspace
 }
 
@@ -131,7 +131,10 @@ func run(ctx context.Context, fn runFunc, spec Spec, rootfs io.Writer) error {
 		if err != nil {
 			return err
 		}
-		ps.Export, ps.Chown = "/"+dir, "/"+dir
+		ps.Chown = "/" + dir
+		if rootfs != nil {
+			ps.Export = "/" + dir
+		}
 		wr := withWorkspace(image, dir, ws.Write)
 		res, err := fn(ctx, ps, wr, rio)
 		if werr := wr.Close(); werr != nil {
