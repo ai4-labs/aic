@@ -30,6 +30,8 @@ type Store struct {
 	lp  layout.Path
 	// UserAgent is sent to registries.
 	UserAgent string
+	// Keychain supplies registry credentials (default: Docker's config).
+	Keychain authn.Keychain
 }
 
 // DefaultDir returns $AIC_STORE, or ~/.aic/store.
@@ -179,11 +181,16 @@ func ParseLocal(s string) (name.Reference, error) {
 func (s *Store) remoteOptions(ctx context.Context) []remote.Option {
 	return []remote.Option{
 		remote.WithContext(ctx),
-		// Reads ~/.docker/config.json, $REGISTRY_AUTH_FILE and podman's
-		// containers/auth.json, plus credential helpers.
-		remote.WithAuthFromKeychain(authn.DefaultKeychain),
+		remote.WithAuthFromKeychain(s.keychain()),
 		remote.WithUserAgent(s.UserAgent),
 	}
+}
+
+func (s *Store) keychain() authn.Keychain {
+	if s.Keychain != nil {
+		return s.Keychain
+	}
+	return authn.DefaultKeychain
 }
 
 // Pull fetches ref for platform and stores it under ref. It returns the

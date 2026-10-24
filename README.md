@@ -12,29 +12,15 @@ aic pull registry.example.com/team/hello:1
 
 ## How it works
 
-- **Native image assembly.** Base images, `COPY`/`ADD` layers and all metadata
-  instructions (`ENV`, `LABEL`, `WORKDIR`, `USER`, `CMD`, ...) are handled by aic
-  itself, with [go-containerregistry](https://github.com/google/go-containerregistry).
-- **Built-in rootless `RUN`.** Each `RUN` gets a fresh container: aic re-executes
-  itself in new user, mount, PID, UTS, IPC and network namespaces, unpacks the
-  image into a tmpfs, runs the command, and diffs the result against the image
-  to produce the new layer.
-  - **Linux:** runs directly on the host as your user. With `newuidmap`/`newgidmap`
-    (shadow-utils) and an `/etc/subuid`/`/etc/subgid` entry, the full ID range is
-    mapped; otherwise only root is, and chowning to other users fails.
-  - **macOS:** aic boots a small Linux VM with Apple's Virtualization framework
-    (about a second) and runs the same container code in it. The kernel is a
-    [LinuxKit](https://github.com/linuxkit/linux) kernel, downloaded once (~16 MB,
-    pinned and checksummed); the guest agent is embedded in aic.
-    By default each build boots its own VM and stops it at the end. `aic vm start`
-    keeps one running in the background instead, and builds use it.
-- **Network:** `RUN` is isolated (loopback only) unless you use
-  `RUN --network=host`, which shares the host's network (the VM's NAT on macOS).
-- **Local store.** Images live in an OCI image layout at
-  `~/.aic/store` (override with `$AIC_STORE`).
-- **Registry auth** comes from `~/.docker/config.json`, podman's
-  `containers/auth.json`, `$REGISTRY_AUTH_FILE`, and credential helpers.
-  Log in with `docker login`, `podman login`, or write that file yourself.
+- aic assembles images itself. Pulling base images, `COPY`, `ADD` and metadata
+  instructions need no container runtime.
+- Each `RUN` executes in a fresh rootless container that aic creates itself, and
+  the changes become a new layer:
+  - on Linux, directly on the host as your user;
+  - on macOS, in a small Linux VM that aic boots in about a second.
+- `RUN` has no network access unless you write `RUN --network=host`.
+- Images are kept in `~/.aic/store`. Registry credentials come from
+  `aic login`, `docker login` or `podman login`.
 
 ## Commands
 
@@ -48,6 +34,8 @@ aic build [flags] [CONTEXT]      build CONTEXT/Dockerfile (default context: .)
   --pull                         always pull base images
   -q, --quiet                    print only the image digest
 
+aic login [-u USER] [--password-stdin] REGISTRY   log in (credentials are verified first)
+aic logout [-a] [REGISTRY]       remove credentials saved by aic login
 aic images [-q] [--no-trunc]     list local images
 aic rmi [-f] [-a] IMAGE...       remove images (a name untags; an ID removes all its names)
 aic vm start|stop|status|logs|rm   manage the macOS build VM (see below)
@@ -69,25 +57,22 @@ aic vm stop
 aic vm rm [-f]                           # delete the cached kernel, initramfs and logs
 ```
 
+The VM runs a [LinuxKit](https://github.com/linuxkit/linux) kernel, downloaded
+once (~16 MB, pinned and checksummed); the guest agent is embedded in aic.
 The background VM serves builds over a Unix socket (`aic.sock`, mode 0600) in
 the VM directory. RUNs from concurrent builds are queued. Interrupting a build
 doesn't affect the VM. On Linux there is no VM and `aic vm` reports so.
 
 ## Dockerfile support
 
-| | |
-|---|---|
-| Instructions | `FROM` (incl. `--platform`, `AS`, `scratch`), `RUN`, `COPY`, `ADD`, `ARG`, `ENV`, `LABEL`, `WORKDIR`, `USER`, `EXPOSE`, `VOLUME`, `CMD`, `ENTRYPOINT`, `SHELL`, `STOPSIGNAL`, `HEALTHCHECK`, `ONBUILD`, `MAINTAINER` |
-| Syntax | parser directives (`escape`), line continuations, exec and shell forms, heredocs (`RUN <<EOF`, `COPY <<EOF`), `$VAR` / `${VAR:-x}` / `${VAR:+x}` / `${VAR:?x}` |
-| Multi-stage | `COPY --from=<stage, index or image>`; stages the target doesn't need are skipped |
-| `COPY`/`ADD` | globs, `.dockerignore` (and `Dockerfile.dockerignore`), `--chown` (ids or names from the image), `--chmod`, `--link` (accepted) |
-| `ADD` | local tar archives are extracted (plain, gzip, bzip2, zstd); `http(s)` URLs with optional `--checksum=sha256:...` |
-| `RUN` | `--network=none\|host` (`default` means `none`) |
-| Build args | `TARGETPLATFORM`, `TARGETOS`, `TARGETARCH`, `BUILDPLATFORM`, ... are predefined |
+All Dockerfile instructions are supported, including multi-stage builds,
+heredocs, `.dockerignore`, and `ADD` of URLs and local archives.
 
-Not supported yet: `RUN --mount` (cache, secrets, ssh), git sources for `ADD`,
-xz archives, `COPY --parents`/`--exclude`, and executing `ONBUILD` triggers of a
-base image (aic warns and skips them).
+Differences from Docker:
+
+- `RUN` has no network unless you write `RUN --network=host`.
+- Not supported yet: `RUN --mount`, `ADD` from git, xz archives,
+  `COPY --parents`/`--exclude`, and `ONBUILD` triggers of base images.
 
 ## Building
 
@@ -104,9 +89,14 @@ and, on macOS, the Xcode command line tools (cgo); tested on macOS 15.
 | Variable | |
 |---|---|
 | `AIC_STORE` | image store (default `~/.aic/store`) |
+| `AIC_AUTH_FILE` | credentials saved by `aic login` (default `~/.aic/auth.json`, mode 0600; secrets go to a Docker credential helper such as `docker-credential-osxkeychain` if one is installed when the file is created) |
 | `AIC_VM_DIR` | VM kernel, initramfs, logs and socket (default `~/.aic/vm`) |
 | `AIC_VM_CPUS`, `AIC_VM_MEMORY` | VM size on macOS (default min(4, host CPUs) and 4096 MiB) |
 | `SOURCE_DATE_EPOCH` | image creation time |
+
+On Linux, install `newuidmap`/`newgidmap` (shadow-utils) and add an
+`/etc/subuid` and `/etc/subgid` entry for your user so that `RUN` can use users
+other than root; without them, chowning files to other users fails.
 
 On Ubuntu 23.10 and later, AppArmor blocks unprivileged user namespaces by
 default. Allow them with `sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0`

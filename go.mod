@@ -1,18 +1,19 @@
 module github.com/rakyll/ai-container
 
-go 1.25.0
+go 1.26.0
 
 require (
 	github.com/Code-Hex/vz/v3 v3.8.0
+	github.com/docker/cli v29.7.2+incompatible
 	github.com/google/go-containerregistry v0.22.1
 	github.com/klauspost/compress v1.19.2
 	github.com/spf13/cobra v1.10.2
-	golang.org/x/sys v0.47.0
+	golang.org/x/sys v0.49.0
+	golang.org/x/term v0.47.0
 )
 
 require (
 	github.com/Code-Hex/go-infinity-channel v1.0.0 // indirect
-	github.com/docker/cli v29.7.2+incompatible // indirect
 	github.com/docker/docker-credential-helpers v0.9.3 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect

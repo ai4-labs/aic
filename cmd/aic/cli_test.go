@@ -2,11 +2,15 @@ package main
 
 import (
 	"bytes"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/go-containerregistry/pkg/registry"
 )
 
 func runCLI(t *testing.T, args ...string) (int, string, string) {
@@ -129,5 +133,73 @@ func TestHumanFormats(t *testing.T) {
 		if got := humanSize(n); got != want {
 			t.Errorf("humanSize(%d) = %q, want %q", n, got, want)
 		}
+	}
+}
+
+func TestCLILoginPushLogout(t *testing.T) {
+	home := t.TempDir()
+	for _, k := range []string{"HOME", "DOCKER_CONFIG", "XDG_CONFIG_HOME", "XDG_RUNTIME_DIR"} {
+		t.Setenv(k, home)
+	}
+	t.Setenv("REGISTRY_AUTH_FILE", "")
+	t.Setenv("AIC_STORE", t.TempDir())
+	authPath := filepath.Join(t.TempDir(), "auth.json")
+	t.Setenv("AIC_AUTH_FILE", authPath)
+
+	reg := registry.New()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if u, p, ok := r.BasicAuth(); !ok || u != "user" || p != "pass" {
+			w.Header().Set("WWW-Authenticate", `Basic realm="test"`)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		reg.ServeHTTP(w, r)
+	}))
+	defer srv.Close()
+	host := strings.TrimPrefix(srv.URL, "http://")
+
+	login := func(input string, args ...string) (int, string, string) {
+		var stdout, stderr bytes.Buffer
+		code := runWithInput(append([]string{"login"}, args...), strings.NewReader(input), &stdout, &stderr)
+		return code, stdout.String(), stderr.String()
+	}
+	if code, _, stderr := login("wrong\n", "-u", "user", "--password-stdin", host); code != exitError || !strings.Contains(stderr, "invalid username or password") {
+		t.Fatalf("bad password: code %d, %s", code, stderr)
+	}
+	if _, err := os.Stat(authPath); err == nil {
+		t.Error("credentials saved after a failed login")
+	}
+	if code, _, _ := login("", "-u", "user", host); code != exitUsage {
+		t.Errorf("non-interactive login without a password: code %d", code)
+	}
+	code, stdout, stderr := login("pass\n", "-u", "user", "--password-stdin", host)
+	if code != exitOK || !strings.Contains(stdout, "Login Succeeded!") {
+		t.Fatalf("login: code %d\n%s%s", code, stdout, stderr)
+	}
+	if code, stdout, _ = runCLI(t, "login", "--get-login", host); code != exitOK || strings.TrimSpace(stdout) != "user" {
+		t.Errorf("--get-login = %d %q", code, stdout)
+	}
+
+	// Pushing uses the saved credentials.
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte("FROM scratch\nCOPY Dockerfile /\n"), 0o644)
+	if code, _, stderr = runCLI(t, "build", "-q", "-t", "app", dir); code != exitOK {
+		t.Fatalf("build: %s", stderr)
+	}
+	if code, _, stderr = runCLI(t, "push", "-q", "app", host+"/team/app:1"); code != exitOK {
+		t.Fatalf("push with credentials: %s", stderr)
+	}
+
+	if code, stdout, _ = runCLI(t, "logout", host); code != exitOK || !strings.Contains(stdout, "Removed login credentials for "+host) {
+		t.Errorf("logout = %d %q", code, stdout)
+	}
+	if code, _, stderr = runCLI(t, "logout", host); code != exitError || !strings.Contains(stderr, "not logged in") {
+		t.Errorf("second logout = %d %s", code, stderr)
+	}
+	if code, _, _ = runCLI(t, "push", "-q", "app", host+"/team/app:2"); code != exitError {
+		t.Errorf("push after logout succeeded")
+	}
+	if code, stdout, _ = runCLI(t, "logout", "--all"); code != exitOK {
+		t.Errorf("logout --all = %d %q", code, stdout)
 	}
 }

@@ -17,6 +17,7 @@ import (
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/spf13/cobra"
 
+	"github.com/rakyll/ai-container/internal/auth"
 	"github.com/rakyll/ai-container/internal/builder"
 	"github.com/rakyll/ai-container/internal/executor"
 	"github.com/rakyll/ai-container/internal/store"
@@ -49,11 +50,16 @@ func args(v cobra.PositionalArgs) cobra.PositionalArgs {
 }
 
 func run(argv []string, stdout, stderr io.Writer) int {
+	return runWithInput(argv, os.Stdin, stdout, stderr)
+}
+
+func runWithInput(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
 	root := newRootCmd()
 	root.SetArgs(argv)
+	root.SetIn(stdin)
 	root.SetOut(stdout)
 	root.SetErr(stderr)
 	cmd, err := root.ExecuteContextC(ctx)
@@ -80,7 +86,7 @@ func newRootCmd() *cobra.Command {
 		SilenceUsage:  true,
 	}
 	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error { return usageError{err} })
-	root.AddCommand(newBuildCmd(), newImagesCmd(), newPullCmd(), newPushCmd(), newRmiCmd(), newVMCmd(), newVersionCmd())
+	root.AddCommand(newBuildCmd(), newImagesCmd(), newLoginCmd(), newLogoutCmd(), newPullCmd(), newPushCmd(), newRmiCmd(), newVMCmd(), newVersionCmd())
 	return root
 }
 
@@ -94,6 +100,11 @@ func openStore() (*store.Store, error) {
 		return nil, err
 	}
 	s.UserAgent = "aic/" + version()
+	authPath, err := auth.DefaultPath()
+	if err != nil {
+		return nil, err
+	}
+	s.Keychain = auth.Keychain(authPath)
 	return s, nil
 }
 
