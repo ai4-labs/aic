@@ -137,6 +137,18 @@ func setupRoot(cfg childConfig) error {
 		}
 	}
 
+	// Mount /proc and /sys while the host's are still visible: in a user
+	// namespace the kernel only allows a new procfs or sysfs if one is
+	// already fully visible in the mount namespace.
+	if err := mountProc(filepath.Join(root, "proc")); err != nil {
+		return err
+	}
+	if cfg.Spec.Network != "host" {
+		// sysfs can only be mounted by the owner of the network
+		// namespace. It is optional for builds, so failure is not fatal.
+		_ = unix.Mount("sysfs", filepath.Join(root, "sys"), "sysfs", unix.MS_RDONLY|unix.MS_NOSUID|unix.MS_NODEV|unix.MS_NOEXEC, "")
+	}
+
 	old := filepath.Join(root, ".aic-old-root")
 	if err := os.Mkdir(old, 0o700); err != nil {
 		return err
@@ -174,17 +186,7 @@ func setupRoot(cfg childConfig) error {
 // setupRuntime mounts /proc (and /sys), configures the network and writes
 // the files runtimes manage in /etc. Those paths are never committed.
 func setupRuntime(cfg childConfig) error {
-	if err := os.MkdirAll("/proc", 0o755); err != nil {
-		return err
-	}
-	if err := mount("proc", "/proc", "proc", unix.MS_NOSUID|unix.MS_NODEV|unix.MS_NOEXEC, ""); err != nil {
-		return err
-	}
 	if cfg.Spec.Network != "host" {
-		// sysfs can only be mounted by the owner of the network namespace.
-		if err := mount("sysfs", "/sys", "sysfs", unix.MS_RDONLY|unix.MS_NOSUID|unix.MS_NODEV|unix.MS_NOEXEC, ""); err != nil {
-			return err
-		}
 		if err := loopbackUp(); err != nil {
 			return fmt.Errorf("bringing up loopback: %w", err)
 		}
@@ -212,6 +214,24 @@ func setupRuntime(cfg childConfig) error {
 		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// mountProc mounts a procfs for the container's PID namespace at dst. Some
+// hosts still refuse that in a user namespace (e.g. when parts of the
+// host's /proc are covered); then the host's /proc is bound instead, which
+// shows host processes but works for builds.
+func mountProc(dst string) error {
+	err := unix.Mount("proc", dst, "proc", unix.MS_NOSUID|unix.MS_NODEV|unix.MS_NOEXEC, "")
+	if err == nil || !errors.Is(err, unix.EPERM) {
+		if err != nil {
+			return fmt.Errorf("mount proc on %s: %w", dst, err)
+		}
+		return nil
+	}
+	if berr := unix.Mount("/proc", dst, "", unix.MS_BIND|unix.MS_REC, ""); berr != nil {
+		return fmt.Errorf("mount proc on %s: %v (binding the host's /proc: %v)", dst, err, berr)
 	}
 	return nil
 }

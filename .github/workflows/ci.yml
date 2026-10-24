@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -29,5 +30,8 @@ jobs:
         run: go vet ./... && GOOS=linux go vet ./...
       - name: test
         run: go test -race ./...
+      - name: container tests (verbose)
+        if: runner.os == 'Linux'
+        run: go test -v -run 'TestRun' ./internal/container/ && grep -E '^/proc|proc ' /proc/self/mountinfo | head -20
       - name: build
         run: make && ./aic version

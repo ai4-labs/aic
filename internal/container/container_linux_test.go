@@ -38,6 +38,9 @@ func helper() int {
 		}
 	}
 	fmt.Printf("interfaces up=%d\n", up)
+	if b, err := os.ReadFile("/proc/self/stat"); err == nil {
+		fmt.Printf("procpid=%s getpid=%d\n", strings.Fields(string(b))[0], os.Getpid())
+	}
 	if err := os.WriteFile("/new", []byte("new"), 0o644); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -134,6 +137,7 @@ func TestRun(t *testing.T) {
 	if res.Error != "" || res.ExitCode != 0 {
 		t.Fatalf("result = %+v\noutput: %s", res, out)
 	}
+	t.Logf("container output:\n%s", out)
 	if !strings.Contains(out, "uid=0") || !strings.Contains(out, "interfaces up=1") {
 		t.Errorf("output = %q, want uid=0 and only loopback", out)
 	}
