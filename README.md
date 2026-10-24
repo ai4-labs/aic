@@ -74,6 +74,7 @@ base image (aic warns and skips them).
 
 ```sh
 make            # builds ./aic
+make install    # installs it to $(go env GOPATH)/bin (override with BINDIR=...)
 ```
 
 On macOS, `make` cross-compiles the Linux guest (`cmd/aic-guest`), embeds it,

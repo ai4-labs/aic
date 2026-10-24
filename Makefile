@@ -2,8 +2,9 @@ GO      ?= go
 GOOS    := $(shell $(GO) env GOOS)
 GOARCH  := $(shell $(GO) env GOARCH)
 GUEST   := internal/vm/guest/aic-guest-linux-$(GOARCH)
+BINDIR  ?= $(or $(shell $(GO) env GOBIN),$(shell $(GO) env GOPATH)/bin)
 
-.PHONY: all aic guest test clean
+.PHONY: all aic guest install test clean
 
 all: aic
 
@@ -20,6 +21,11 @@ endif
 
 guest:
 	CGO_ENABLED=0 GOOS=linux GOARCH=$(GOARCH) $(GO) build -trimpath -ldflags="-s -w" -o $(GUEST) ./cmd/aic-guest
+
+# Copying keeps the code signature, which is embedded in the binary.
+install: aic
+	install -d $(BINDIR)
+	install -m 0755 aic $(BINDIR)/aic
 
 test:
 	$(GO) test ./...
