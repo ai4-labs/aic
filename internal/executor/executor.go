@@ -29,7 +29,8 @@ type Spec struct {
 	Env     []string // KEY=VALUE
 	WorkDir string
 	User    string
-	// Network is "none" (default; isolated, loopback only) or "host".
+	// Network is "host" (share the host's network; on macOS, the VM's)
+	// or "none" (isolated, loopback only). Empty means "host".
 	Network        string
 	Stdout, Stderr io.Writer
 }
@@ -56,8 +57,8 @@ type runFunc func(ctx context.Context, spec proto.Spec, image io.Reader, stdout,
 
 // run adapts a runFunc to Executor.Run.
 func run(ctx context.Context, fn runFunc, spec Spec, rootfs io.Writer) error {
-	network := spec.Network
-	if network != "host" {
+	network := "host"
+	if spec.Network == "none" {
 		network = "none"
 	}
 	ps := proto.Spec{

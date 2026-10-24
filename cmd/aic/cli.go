@@ -180,7 +180,8 @@ func newBuildCmd() *cobra.Command {
 CONTEXT is the build context directory (default "."). The Dockerfile is
 CONTEXT/Dockerfile unless --file is given. RUN instructions run in
 rootless Linux containers; on macOS, inside a small Linux VM that aic
-boots itself. RUN has no network access unless --network=host is given.`,
+boots itself. RUN shares the host's network; use RUN --network=none to
+isolate a step.`,
 		Example: `  aic build -t hello .
   aic build -f build/Dockerfile --build-arg VERSION=1.2 -t app:1.2 .
   aic build --target test --platform linux/amd64 .`,

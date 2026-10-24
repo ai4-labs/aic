@@ -45,8 +45,8 @@ func (b *builder) executor() (executor.Executor, error) {
 }
 
 func (b *builder) run(ctx context.Context, s *stage, ins *dockerfile.Instruction) error {
-	// RUN has no network unless --network=host is given.
-	network := "none"
+	// RUN shares the host's network unless --network=none is given.
+	network := "host"
 	for _, f := range ins.Flags {
 		k, v, _ := strings.Cut(strings.TrimPrefix(f, "--"), "=")
 		switch k {
@@ -56,7 +56,7 @@ func (b *builder) run(ctx context.Context, s *stage, ins *dockerfile.Instruction
 				network = v
 			case "default":
 			default:
-				return fmt.Errorf("--network=%s: must be none, default (same as none) or host", v)
+				return fmt.Errorf("--network=%s: must be host, default (same as host) or none", v)
 			}
 		default:
 			return fmt.Errorf("--%s is not supported", k)

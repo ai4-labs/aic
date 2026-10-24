@@ -376,6 +376,9 @@ RUN true
 	if spec.WorkDir != "/work" || spec.User != "7" || spec.Network != "none" {
 		t.Errorf("spec = %+v", spec)
 	}
+	if n := fe.specs[1].Network; n != "host" {
+		t.Errorf("default RUN network = %q, want host", n)
+	}
 
 	// The RUN layer holds only the changes, with a whiteout for "gone".
 	layers, _ := img.Layers()

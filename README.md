@@ -18,7 +18,8 @@ aic pull registry.example.com/team/hello:1
   the changes become a new layer:
   - on Linux, directly on the host as your user;
   - on macOS, in a small Linux VM that aic boots in about a second.
-- `RUN` has no network access unless you write `RUN --network=host`.
+- `RUN` shares the host's network (on macOS, the VM's). Use
+  `RUN --network=none` to isolate a step.
 - Images are kept in `~/.aic/store`. Log in to registries with `aic login`.
 
 ## Commands
@@ -67,11 +68,8 @@ doesn't affect the VM. On Linux there is no VM and `aic vm` reports so.
 All Dockerfile instructions are supported, including multi-stage builds,
 heredocs, `.dockerignore`, and `ADD` of URLs and local archives.
 
-Differences from Docker:
-
-- `RUN` has no network unless you write `RUN --network=host`.
-- Not supported yet: `RUN --mount`, `ADD` from git, xz archives,
-  `COPY --parents`/`--exclude`, and `ONBUILD` triggers of base images.
+Not supported yet: `RUN --mount`, `ADD` from git, xz archives,
+`COPY --parents`/`--exclude`, and `ONBUILD` triggers of base images.
 
 ## Building
 

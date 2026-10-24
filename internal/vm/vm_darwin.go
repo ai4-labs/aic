@@ -142,7 +142,8 @@ func Start(ctx context.Context, o Options) (*Machine, error) {
 	}
 	cfg.SetSerialPortsVirtualMachineConfiguration(ports)
 
-	// Outbound network through NAT; used only by RUN --network=host.
+	// Outbound network through NAT, shared by RUN containers unless
+	// they use --network=none.
 	nat, err := vz.NewNATNetworkDeviceAttachment()
 	if err != nil {
 		return nil, err
