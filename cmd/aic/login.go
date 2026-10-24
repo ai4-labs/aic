@@ -45,9 +45,7 @@ func newLoginCmd() *cobra.Command {
 The credentials are checked with the registry, then saved to ~/.aic/auth.json
 ($AIC_AUTH_FILE). If a Docker credential helper is installed when that file
 is created (docker-credential-osxkeychain on macOS, -secretservice or -pass
-on Linux), the secret is stored there instead of in the file.
-
-aic also uses credentials from "docker login" and "podman login".`,
+on Linux), the secret is stored there instead of in the file.`,
 		Example: `  aic login ghcr.io
   aic login -u myuser docker.io
   echo "$TOKEN" | aic login -u myuser --password-stdin ghcr.io`,
@@ -178,11 +176,9 @@ func newLogoutCmd() *cobra.Command {
 	var all bool
 	var authfile string
 	cmd := &cobra.Command{
-		Use:   "logout [flags] REGISTRY",
-		Short: "Log out of a container registry",
-		Long: `Log out of a container registry by removing the credentials saved by
-"aic login". Credentials from "docker login" and "podman login" are not
-touched.`,
+		Use:     "logout [flags] REGISTRY",
+		Short:   "Log out of a container registry",
+		Long:    `Log out of a container registry by removing the credentials saved by "aic login".`,
 		Example: "  aic logout ghcr.io\n  aic logout --all",
 		Args: args(func(cmd *cobra.Command, a []string) error {
 			if all && len(a) > 0 {
@@ -220,7 +216,7 @@ touched.`,
 			}
 			if !found {
 				if u, _ := loggedInUser(f, path, reg); u != "" {
-					return fmt.Errorf("not logged in to %s with aic; the credentials in use come from docker login or podman login (use docker logout or podman logout)", registryName(reg))
+					return fmt.Errorf("not logged in to %s with aic login; the credentials in use come from another tool's configuration", registryName(reg))
 				}
 				return fmt.Errorf("not logged in to %s", registryName(reg))
 			}

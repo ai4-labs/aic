@@ -19,8 +19,7 @@ aic pull registry.example.com/team/hello:1
   - on Linux, directly on the host as your user;
   - on macOS, in a small Linux VM that aic boots in about a second.
 - `RUN` has no network access unless you write `RUN --network=host`.
-- Images are kept in `~/.aic/store`. Registry credentials come from
-  `aic login`, `docker login` or `podman login`.
+- Images are kept in `~/.aic/store`. Log in to registries with `aic login`.
 
 ## Commands
 

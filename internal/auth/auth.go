@@ -236,8 +236,8 @@ func Keychain(path string) authn.Keychain {
 // ErrUnauthorized is returned by Verify for rejected credentials.
 var ErrUnauthorized = errors.New("invalid username or password")
 
-// Verify checks credentials against the registry, the way docker login
-// does: it authenticates and requests the API root.
+// Verify checks credentials against the registry: it authenticates and
+// requests the API root.
 func Verify(ctx context.Context, reg name.Registry, username, password string) error {
 	auth := authn.FromConfig(authn.AuthConfig{Username: username, Password: password})
 	tr, err := transport.NewWithContext(ctx, reg, auth, http.DefaultTransport, []string{reg.Scope(transport.PullScope)})
