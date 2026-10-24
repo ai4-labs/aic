@@ -5,9 +5,9 @@ A podman-like container image builder. `aic` builds OCI images from a
 single binary: no daemon, no podman or Docker, no root.
 
 ```sh
-aic build -t hello examples/hello        # tagged localhost/hello:sha256-<digest>
-aic push hello registry.example.com/team/hello:1
-aic pull registry.example.com/team/hello:1
+aic build -t hello examples/hello
+aic push hello registry.example.com/team/hello
+aic pull registry.example.com/team/hello:sha256-1c8cd8f6ca12a298bd0a6834318e69157f00f146c1fffee15bb96edb70da1eb2
 ```
 
 ## How it works
