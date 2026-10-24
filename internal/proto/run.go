@@ -70,7 +70,7 @@ func (f writerFunc) Write(p []byte) (int, error) { return f(p) }
 // HostRun performs one run over a frame channel: it sends the spec, the
 // image, then stdin and terminal resizes while dispatching output frames,
 // until the result arrives; then it ends the run with FrameDone. It is
-// the host side of the protocol, used against the guest's serial port.
+// the host side of the protocol, used against the guest.
 // Cancelling ctx asks the other side to kill the container; HostRun still
 // waits for the result.
 func HostRun(ctx context.Context, r io.Reader, fw *Writer, spec Spec, image io.Reader, rio IO) (Result, error) {

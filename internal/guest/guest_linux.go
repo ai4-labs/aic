@@ -40,10 +40,76 @@ func Main() {
 		log.Printf("aic-guest: raw mode: %v", err)
 		poweroff()
 	}
-	if err := serve(ch, ch); err != nil && !errors.Is(err, io.EOF) {
+	// Requests come over vsock if the modules load: it is much faster
+	// than the console port, which is the fallback. Either way, the
+	// ready frame on the console port says which.
+	var r io.Reader
+	var w io.Writer
+	fw := proto.NewWriter(ch)
+	if conn, err := acceptVsock(fw); err == nil {
+		r, w = conn, conn
+	} else {
+		log.Printf("aic-guest: vsock unavailable, using the console port: %v", err)
+		if err := fw.Frame(proto.FrameReady, nil); err != nil {
+			log.Printf("aic-guest: %v", err)
+			poweroff()
+		}
+		r, w = ch, ch
+	}
+	if err := serve(r, w); err != nil && !errors.Is(err, io.EOF) {
 		log.Printf("aic-guest: %v", err)
 	}
 	poweroff()
+}
+
+// VsockPort is where the guest accepts the host's connection.
+const vsockPort = 1024
+
+// acceptVsock loads the vsock modules, listens, announces the port on
+// the console port and accepts the host's connection.
+func acceptVsock(console *proto.Writer) (*os.File, error) {
+	order, err := os.ReadFile("/lib/modules/order")
+	if err != nil {
+		return nil, err
+	}
+	for _, name := range strings.Fields(string(order)) {
+		if err := loadModule("/lib/modules/" + name); err != nil {
+			return nil, fmt.Errorf("loading %s: %w", name, err)
+		}
+	}
+	fd, err := unix.Socket(unix.AF_VSOCK, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer unix.Close(fd)
+	if err := unix.Bind(fd, &unix.SockaddrVM{CID: unix.VMADDR_CID_ANY, Port: vsockPort}); err != nil {
+		return nil, err
+	}
+	if err := unix.Listen(fd, 1); err != nil {
+		return nil, err
+	}
+	if err := console.Frame(proto.FrameReady, []byte(fmt.Sprintf("vsock:%d", vsockPort))); err != nil {
+		return nil, err
+	}
+	// From here on the host expects vsock: failing is fatal.
+	nfd, _, err := unix.Accept4(fd, unix.SOCK_CLOEXEC)
+	if err != nil {
+		log.Printf("aic-guest: accepting the host's connection: %v", err)
+		poweroff()
+	}
+	return os.NewFile(uintptr(nfd), "vsock"), nil
+}
+
+func loadModule(path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if err := unix.FinitModule(int(f.Fd()), "", 0); err != nil && !errors.Is(err, unix.EEXIST) {
+		return err
+	}
+	return nil
 }
 
 func poweroff() {
@@ -110,9 +176,6 @@ func makeRaw(fd int) error {
 // serve handles RUN requests until the channel closes.
 func serve(r io.Reader, w io.Writer) error {
 	fw := proto.NewWriter(w)
-	if err := fw.Frame(proto.FrameReady, nil); err != nil {
-		return err
-	}
 	var buf []byte
 	for {
 		typ, payload, err := proto.ReadFrame(r, buf)

@@ -134,10 +134,11 @@ are not kept between runs; pass the API key with `-e` each time.
 On macOS, each `aic build` that has `RUN` steps, and each `aic run`, boots its
 own small Linux VM (about a second) and stops it when done, so concurrent
 builds and runs don't wait for each other. The VM runs a
-[LinuxKit](https://github.com/linuxkit/linux) kernel, downloaded once (~16 MB,
-pinned and checksummed); the guest agent is embedded in aic. If the VM fails,
-the error includes the end of its console log. `aic prune --vm` deletes the
-cached kernel and initramfs.
+[LinuxKit](https://github.com/linuxkit/linux) kernel and its vsock modules,
+downloaded once (a ~200 MB download, pinned and checksummed); the guest agent
+is embedded in aic. Images and workspaces reach the VM over vsock. If the VM
+fails, the error includes the end of its console log. `aic prune --vm` deletes
+the cached kernel, modules and initramfs.
 
 ## Dockerfile support
 
@@ -181,7 +182,7 @@ or an AppArmor profile for aic.
 - Each `RUN` and `aic run` unpacks the full image (and workspace) into a
   tmpfs, so memory bounds how large they can be (on macOS, the VM's memory).
 - On macOS, every build and run copies the whole image into its VM, which
-  takes several seconds for large images (about 13 s for the Claude Code
+  takes a few seconds for large images (about 4 s for the Claude Code
   example).
 - The macOS VM is arm64 only (Apple silicon), and `RUN` uses the host's
   architecture: no emulation for other `--platform`s yet.

@@ -8,10 +8,13 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/Code-Hex/vz/v3"
@@ -33,9 +36,10 @@ type Options struct {
 // Machine is a running build VM.
 type Machine struct {
 	vm        *vz.VirtualMachine
-	toGuest   *os.File // host end of the guest's /dev/hvc1, write side
-	fromGuest *os.File // host end of the guest's /dev/hvc1, read side
+	toGuest   *os.File  // host end of the guest's /dev/hvc1, write side
+	fromGuest io.Reader // requests channel: vsock, or /dev/hvc1's read side
 	fw        *proto.Writer
+	conn      io.Closer // the vsock connection, if used
 	console   *os.File
 	logPath   string
 	cpus      uint
@@ -64,11 +68,11 @@ func Start(ctx context.Context, o Options) (*Machine, error) {
 	if err != nil {
 		return nil, err
 	}
-	kernel, err := EnsureKernel(ctx, o.Dir, runtime.GOARCH, o.Progress)
+	kernel, mods, err := EnsureKernel(ctx, o.Dir, runtime.GOARCH, o.Progress)
 	if err != nil {
 		return nil, err
 	}
-	initrd, err := ensureInitrd(o.Dir, guest)
+	initrd, err := ensureInitrd(o.Dir, guest, mods)
 	if err != nil {
 		return nil, err
 	}
@@ -113,7 +117,8 @@ func Start(ctx context.Context, o Options) (*Machine, error) {
 	files = append(files, devnull)
 	// Each VM has its own console log, shown in errors and removed when
 	// the VM stops.
-	if m.console, err = os.CreateTemp(o.Dir, "console-*.log"); err != nil {
+	removeStaleLogs(o.Dir)
+	if m.console, err = os.CreateTemp(o.Dir, fmt.Sprintf("console-%d-*.log", os.Getpid())); err != nil {
 		return nil, err
 	}
 	m.logPath = m.console.Name()
@@ -164,6 +169,13 @@ func Start(ctx context.Context, o Options) (*Machine, error) {
 	nic.SetMACAddress(mac)
 	cfg.SetNetworkDevicesVirtualMachineConfiguration([]*vz.VirtioNetworkDeviceConfiguration{nic})
 
+	// vsock: the fast request channel, if the guest can use it.
+	sock, err := vz.NewVirtioSocketDeviceConfiguration()
+	if err != nil {
+		return nil, err
+	}
+	cfg.SetSocketDevicesVirtualMachineConfiguration([]vz.SocketDeviceConfiguration{sock})
+
 	entropy, err := vz.NewVirtioEntropyDeviceConfiguration()
 	if err != nil {
 		return nil, err
@@ -182,9 +194,12 @@ func Start(ctx context.Context, o Options) (*Machine, error) {
 
 	ready := make(chan error, 1)
 	go func() {
-		typ, _, err := proto.ReadFrame(fromGuest, nil)
+		typ, p, err := proto.ReadFrame(fromGuest, nil)
 		if err == nil && typ != proto.FrameReady {
 			err = fmt.Errorf("%w %q from guest", proto.ErrUnexpectedFrame, typ)
+		}
+		if err == nil {
+			err = m.useVsock(string(p))
 		}
 		ready <- err
 	}()
@@ -294,8 +309,48 @@ func (m *Machine) stop() {
 		for _, f := range m.files {
 			f.Close()
 		}
+		if m.conn != nil {
+			m.conn.Close()
+		}
 		if m.logPath != "" {
 			os.Remove(m.logPath)
 		}
 	})
+}
+
+// useVsock switches requests to vsock if the guest's ready frame offers
+// it ("vsock:PORT"); otherwise they stay on the console port.
+func (m *Machine) useVsock(ready string) error {
+	port, ok := strings.CutPrefix(ready, "vsock:")
+	if !ok {
+		return nil
+	}
+	n, err := strconv.ParseUint(port, 10, 32)
+	if err != nil {
+		return fmt.Errorf("guest offered vsock port %q", port)
+	}
+	devs := m.vm.SocketDevices()
+	if len(devs) == 0 {
+		return errors.New("the VM has no vsock device")
+	}
+	conn, err := devs[0].Connect(uint32(n))
+	if err != nil {
+		return fmt.Errorf("connecting to the guest over vsock: %w", err)
+	}
+	m.conn, m.fromGuest, m.fw = conn, conn, proto.NewWriter(conn)
+	return nil
+}
+
+// removeStaleLogs removes the console logs of VMs whose aic process is
+// gone without cleaning up (killed, for example).
+func removeStaleLogs(dir string) {
+	logs, _ := filepath.Glob(filepath.Join(dir, "console-*.log"))
+	for _, p := range logs {
+		var pid int
+		if _, err := fmt.Sscanf(filepath.Base(p), "console-%d-", &pid); err == nil && pid > 0 &&
+			syscall.Kill(pid, 0) != syscall.ESRCH {
+			continue // still running
+		}
+		os.Remove(p)
+	}
 }

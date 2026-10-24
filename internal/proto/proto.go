@@ -1,6 +1,6 @@
 // Package proto defines how a RUN request travels to the process that
 // executes it: the container spec, its result, and a framing format used
-// to multiplex streams over a single byte channel (the virtio serial port
+// to multiplex streams over a single byte channel (the vsock connection
 // between aic on macOS and its Linux VM).
 package proto
 
