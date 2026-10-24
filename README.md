@@ -38,6 +38,7 @@ aic build [flags] [CONTEXT]      build CONTEXT/Dockerfile (default context: .)
   --no-cache                     run every step instead of using the build cache
   -q, --quiet                    print only the image digest
 
+aic login -i [REGISTRY]          guided login: pick a registry, get help creating a token
 aic login [-u USER] [--password-stdin] REGISTRY   log in (credentials are verified first)
 aic logout [-a] [REGISTRY]       remove credentials saved by aic login
 aic images [-q] [--no-trunc]     list local images

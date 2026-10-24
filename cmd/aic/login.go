@@ -31,8 +31,8 @@ func authFile(flag string) (string, error) {
 }
 
 type loginOptions struct {
-	username, password, authfile string
-	passwordStdin, getLogin      bool
+	username, password, authfile         string
+	passwordStdin, getLogin, interactive bool
 }
 
 func newLoginCmd() *cobra.Command {
@@ -46,11 +46,26 @@ The credentials are checked with the registry, then saved to ~/.aic/auth.json
 ($AIC_AUTH_FILE). If a Docker credential helper is installed when that file
 is created (docker-credential-osxkeychain on macOS, -secretservice or -pass
 on Linux), the secret is stored there instead of in the file.`,
-		Example: `  aic login ghcr.io
+		Example: `  aic login -i
+  aic login ghcr.io
   aic login -u myuser docker.io
   echo "$TOKEN" | aic login -u myuser --password-stdin ghcr.io`,
-		Args: args(cobra.ExactArgs(1)),
-		RunE: func(cmd *cobra.Command, a []string) error { return runLogin(cmd, a[0], o) },
+		Args: args(func(cmd *cobra.Command, a []string) error {
+			if o.interactive {
+				return cobra.MaximumNArgs(1)(cmd, a)
+			}
+			return cobra.ExactArgs(1)(cmd, a)
+		}),
+		RunE: func(cmd *cobra.Command, a []string) error {
+			if o.interactive {
+				registry := ""
+				if len(a) == 1 {
+					registry = a[0]
+				}
+				return runInteractiveLogin(cmd, registry, o)
+			}
+			return runLogin(cmd, a[0], o)
+		},
 	}
 	f := cmd.Flags()
 	f.StringVarP(&o.username, "username", "u", "", "user name")
@@ -58,7 +73,27 @@ on Linux), the secret is stored there instead of in the file.`,
 	f.BoolVar(&o.passwordStdin, "password-stdin", false, "read the password or token from stdin")
 	f.BoolVar(&o.getLogin, "get-login", false, "print the user name logged in to REGISTRY")
 	f.StringVar(&o.authfile, "authfile", "", "credentials file (default ~/.aic/auth.json)")
+	f.BoolVarP(&o.interactive, "interactive", "i", false, "guided login: pick a registry, get help creating a token, retry on mistakes")
 	return cmd
+}
+
+func runInteractiveLogin(cmd *cobra.Command, registry string, o loginOptions) error {
+	if o.username != "" || o.password != "" || o.passwordStdin || o.getLogin {
+		return usagef("--interactive can't be combined with --username, --password, --password-stdin or --get-login")
+	}
+	stdin, ok := cmd.InOrStdin().(*os.File)
+	if !ok || !term.IsTerminal(int(stdin.Fd())) {
+		return usagef("--interactive needs a terminal")
+	}
+	path, err := authFile(o.authfile)
+	if err != nil {
+		return err
+	}
+	f, err := auth.OpenDefault(path)
+	if err != nil {
+		return err
+	}
+	return interactiveLogin(cmd.Context(), terminalPrompter(stdin, cmd.ErrOrStderr()), f, registry)
 }
 
 func runLogin(cmd *cobra.Command, registry string, o loginOptions) error {
