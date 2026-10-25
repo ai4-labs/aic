@@ -81,7 +81,7 @@ func (e *Error) Error() string { return fmt.Sprintf("line %d: %s", e.Line, e.Msg
 
 var (
 	directiveRE = regexp.MustCompile(`^#\s*([a-zA-Z][a-zA-Z0-9]*)\s*=\s*(.+?)\s*$`)
-	heredocRE   = regexp.MustCompile(`<<(-?)(?:"([A-Za-z_][A-Za-z0-9_]*)"|'([A-Za-z_][A-Za-z0-9_]*)'|([A-Za-z_][A-Za-z0-9_]*))`)
+	heredocRE   = regexp.MustCompile(`^<<(-?)(?:"([A-Za-z_][A-Za-z0-9_]*)"|'([A-Za-z_][A-Za-z0-9_]*)'|([A-Za-z_][A-Za-z0-9_]*))`)
 )
 
 var knownCmds = map[string]bool{
@@ -196,10 +196,24 @@ func readHeredocs(ins *Instruction, lines []string, i int) (int, error) {
 		return i, nil
 	}
 	src := ins.Args[0]
-	if ins.Cmd != "run" {
+	var matches [][]string
+	if ins.Cmd == "run" {
+		// As in BuildKit, a heredoc starts a shell word, possibly after a
+		// file descriptor: "$((1<<n))" and "<<" in quotes don't.
+		for _, w := range splitWords(src, '\\') {
+			if m := heredocRE.FindStringSubmatch(strings.TrimLeft(w, "0123456789")); m != nil {
+				matches = append(matches, m)
+			}
+		}
+	} else {
+		// COPY and ADD sources that are a heredoc and nothing else.
 		src = strings.Join(ins.Args, " ")
+		for _, a := range ins.Args[:len(ins.Args)-1] {
+			if m := heredocRE.FindStringSubmatch(a); m != nil && m[0] == a {
+				matches = append(matches, m)
+			}
+		}
 	}
-	matches := heredocRE.FindAllStringSubmatch(src, -1)
 	if len(matches) == 0 {
 		return i, nil
 	}
@@ -302,7 +316,7 @@ func parseLine(line string, lineNo int, esc rune) (Instruction, error) {
 		if args, ok := parseJSON(rest); ok {
 			ins.Args, ins.JSON = args, true
 		} else {
-			ins.Args = strings.Fields(rest)
+			ins.Args = splitWords(rest, esc)
 		}
 		if len(ins.Args) < 2 {
 			return fail("requires at least one source and a destination")
@@ -311,7 +325,7 @@ func parseLine(line string, lineNo int, esc rune) (Instruction, error) {
 		if args, ok := parseJSON(rest); ok {
 			ins.Args, ins.JSON = args, true
 		} else {
-			ins.Args = strings.Fields(rest)
+			ins.Args = splitWords(rest, esc)
 		}
 		if len(ins.Args) == 0 {
 			return fail("requires at least one path")
@@ -329,7 +343,7 @@ func parseLine(line string, lineNo int, esc rune) (Instruction, error) {
 		}
 		ins.Args = words
 	case "from":
-		ins.Args = strings.Fields(rest)
+		ins.Args = splitWords(rest, esc)
 		switch {
 		case len(ins.Args) == 1:
 		case len(ins.Args) == 3 && strings.EqualFold(ins.Args[1], "as"):
@@ -337,7 +351,7 @@ func parseLine(line string, lineNo int, esc rune) (Instruction, error) {
 			return fail("expected FROM [--platform=...] <image> [AS <name>]")
 		}
 	case "expose":
-		ins.Args = strings.Fields(rest)
+		ins.Args = splitWords(rest, esc)
 		if len(ins.Args) == 0 {
 			return fail("requires at least one port")
 		}

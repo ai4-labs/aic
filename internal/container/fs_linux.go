@@ -31,6 +31,7 @@ func underMount(name string) bool {
 // unchanged at export time, the command didn't touch it and the intended
 // metadata is reported instead of what is on disk.
 type intended struct {
+	path     string
 	ctime    unix.Timespec
 	uid, gid int
 	xattrs   map[string]string
@@ -49,7 +50,7 @@ func extract(r io.Reader) (*extractState, error) {
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
-			return st, nil
+			break
 		}
 		if err != nil {
 			return nil, err
@@ -65,6 +66,16 @@ func extract(r io.Reader) (*extractState, error) {
 			return nil, fmt.Errorf("%s: %w", name, err)
 		}
 	}
+	// Extracting files into a directory updates the directory's ctime, so
+	// record final ctimes once the whole archive has been unpacked.
+	for ino, m := range st.meta {
+		var s unix.Stat_t
+		if err := unix.Lstat(m.path, &s); err == nil && s.Ino == ino {
+			m.ctime = s.Ctim
+			st.meta[ino] = m
+		}
+	}
+	return st, nil
 }
 
 func extractOne(st *extractState, tr *tar.Reader, hdr *tar.Header, p string) error {
@@ -153,7 +164,7 @@ func extractOne(st *extractState, tr *tar.Reader, hdr *tar.Header, p string) err
 		if err := unix.Lstat(p, &s); err != nil {
 			return err
 		}
-		st.meta[s.Ino] = intended{ctime: s.Ctim, uid: hdr.Uid, gid: hdr.Gid, xattrs: xattrs}
+		st.meta[s.Ino] = intended{path: p, ctime: s.Ctim, uid: hdr.Uid, gid: hdr.Gid, xattrs: xattrs}
 	}
 	return nil
 }

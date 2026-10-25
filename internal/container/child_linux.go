@@ -108,7 +108,11 @@ func setupRoot(cfg childConfig) error {
 	if err := mount("", "/", "", unix.MS_REC|unix.MS_PRIVATE, ""); err != nil {
 		return err
 	}
-	if err := mount("tmpfs", root, "tmpfs", 0, "mode=0755"); err != nil {
+	opts := "mode=0755"
+	if cfg.RootfsSize != "" {
+		opts += ",size=" + cfg.RootfsSize
+	}
+	if err := mount("tmpfs", root, "tmpfs", 0, opts); err != nil {
 		return err
 	}
 	dev := filepath.Join(root, "dev")

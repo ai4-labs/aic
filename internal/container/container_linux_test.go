@@ -127,6 +127,8 @@ func testImage(t *testing.T) []byte {
 	add(&tar.Header{Name: "etc/", Typeflag: tar.TypeDir, Mode: 0o755}, nil)
 	add(&tar.Header{Name: "etc/passwd", Typeflag: tar.TypeReg, Mode: 0o644}, []byte("root:x:0:0::/root:/bin/sh\n"))
 	add(&tar.Header{Name: "owned", Typeflag: tar.TypeReg, Mode: 0o640, Uid: 1000, Gid: 1001}, []byte("o"))
+	add(&tar.Header{Name: "owneddir/", Typeflag: tar.TypeDir, Mode: 0o750, Uid: 1000, Gid: 1001}, nil)
+	add(&tar.Header{Name: "owneddir/child", Typeflag: tar.TypeReg, Mode: 0o640, Uid: 1000, Gid: 1001}, []byte("c"))
 	add(&tar.Header{Name: "mod", Typeflag: tar.TypeReg, Mode: 0o644}, []byte("m"))
 	add(&tar.Header{Name: "del", Typeflag: tar.TypeReg, Mode: 0o644}, []byte("d"))
 	add(&tar.Header{Name: "link", Typeflag: tar.TypeSymlink, Linkname: "/owned"}, nil)
@@ -152,10 +154,37 @@ func runHelper(t *testing.T, env ...string) (proto.Result, map[string]entry, str
 	return runSpec(t, spec, nil, testImage(t))
 }
 
+// pauseBefore returns a reader of the image tar that pauses before the
+// entry name. File times only advance with the clock tick, so without
+// the pause a small image is extracted within one tick, and changes to
+// a directory's ctime from extracting its entries go unnoticed.
+func pauseBefore(image []byte, name string) io.Reader {
+	br := bytes.NewReader(image)
+	tr := tar.NewReader(br)
+	for {
+		h, err := tr.Next()
+		if err != nil {
+			return bytes.NewReader(image)
+		}
+		if h.Name == name {
+			at := len(image) - br.Len() - 512 // the entry's header block
+			return io.MultiReader(bytes.NewReader(image[:at]), sleepReader(50*time.Millisecond), bytes.NewReader(image[at:]))
+		}
+	}
+}
+
+// sleepReader sleeps, then reads as empty.
+type sleepReader time.Duration
+
+func (d sleepReader) Read([]byte) (int, error) {
+	time.Sleep(time.Duration(d))
+	return 0, io.EOF
+}
+
 func runSpec(t *testing.T, spec proto.Spec, stdin io.Reader, image []byte) (proto.Result, map[string]entry, string) {
 	t.Helper()
 	var stdout, stderr, export bytes.Buffer
-	res, err := Run(context.Background(), spec, bytes.NewReader(image),
+	res, err := Run(context.Background(), spec, pauseBefore(image, "owneddir/child"),
 		proto.IO{Stdin: stdin, Stdout: &stdout, Stderr: &stderr, Export: &export})
 	if err != nil {
 		if errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.EACCES) || strings.Contains(err.Error(), "operation not permitted") {
@@ -192,6 +221,9 @@ func TestRun(t *testing.T) {
 	}
 	if e := files["owned"]; e.uid != 1000 || e.gid != 1001 || e.mode != 0o640 || e.body != "o" {
 		t.Errorf("owned = %+v, want uid 1000 gid 1001 mode 0640 preserved", e)
+	}
+	if e := files["owneddir"]; e.uid != 1000 || e.gid != 1001 || e.mode != 0o750 {
+		t.Errorf("owneddir = %+v, want uid 1000 gid 1001 mode 0750 preserved", e)
 	}
 	// mod and hard are one inode; either may be exported first.
 	m, h := files["mod"], files["hard"]

@@ -27,6 +27,9 @@ import (
 
 // Main runs the guest. It does not return.
 func Main() {
+	// The VM's memory serves nothing but containers, so their files may
+	// use most of it rather than the kernel's default half.
+	container.RootfsSize = "90%"
 	if err := setup(); err != nil {
 		log.Printf("aic-guest: setup: %v", err)
 		poweroff()

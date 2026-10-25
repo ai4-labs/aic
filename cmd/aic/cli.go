@@ -160,6 +160,10 @@ func runBuild(cmd *cobra.Command, contextDir string, o buildOptions) error {
 	if o.quiet {
 		progress, runOut = io.Discard, io.Discard
 	}
+	// Sign aic for the VM now: signing at the first RUN re-executes aic,
+	// which would start the build over. If signing fails, that RUN
+	// reports it; builds without RUN don't need the VM.
+	_ = ensureVMAccess(progress)
 	c, err := newClient(progress)
 	if err != nil {
 		return err

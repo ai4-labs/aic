@@ -108,6 +108,22 @@ CMD ["x"]
 	if ins[4].Cmd != "cmd" {
 		t.Errorf("last = %+v", ins[4])
 	}
+
+	// Shifts like "$((1<<n))", "<<" in quotes and here-strings are not
+	// heredocs, and quoted COPY paths with spaces stay intact.
+	df2 := parse(t, `FROM alpine
+RUN echo $((1<<n)) && python3 -c 'print(1<<shift)' && echo "<<NOT_A_HEREDOC" && cat <<<str
+COPY "my file.txt" a\ b.txt "/dst dir/"
+`)
+	if len(df2.Instructions) != 3 {
+		t.Fatalf("got %d instructions: %+v", len(df2.Instructions), df2.Instructions)
+	}
+	if len(df2.Instructions[1].Heredocs) != 0 {
+		t.Errorf("unexpected heredocs: %+v", df2.Instructions[1].Heredocs)
+	}
+	if want := []string{`"my file.txt"`, `a\ b.txt`, `"/dst dir/"`}; !reflect.DeepEqual(df2.Instructions[2].Args, want) {
+		t.Errorf("COPY args = %q, want %q", df2.Instructions[2].Args, want)
+	}
 }
 
 func TestParseErrors(t *testing.T) {

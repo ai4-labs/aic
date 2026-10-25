@@ -38,6 +38,7 @@ const childEnv = "_AIC_CONTAINER_INIT"
 type childConfig struct {
 	Spec       proto.Spec `json:"spec"`
 	Rootfs     string     `json:"rootfs"`     // empty host directory used as the tmpfs mount point
+	RootfsSize string     `json:"rootfsSize"` // size= option of that tmpfs, if any (see RootfsSize)
 	ResolvConf string     `json:"resolvConf"` // content for /etc/resolv.conf
 	// SingleID is set when only the caller's own UID/GID are mapped into
 	// the user namespace, so other owners can't be represented on disk.
@@ -47,6 +48,11 @@ type childConfig struct {
 	// cost it its capabilities, so it must exec itself once more.
 	Reexec bool `json:"reexec"`
 }
+
+// RootfsSize, if set, limits the tmpfs that holds a container's files,
+// as a tmpfs size= option ("90%", "8g"). Otherwise the kernel's default
+// applies: half of RAM.
+var RootfsSize string
 
 const configEnv = "_AIC_CONTAINER_CONFIG"
 
@@ -83,7 +89,7 @@ func Run(ctx context.Context, spec proto.Spec, image io.Reader, rio proto.IO) (p
 	}
 	defer os.Remove(dir)
 
-	cfg := childConfig{Spec: spec, Rootfs: dir, ResolvConf: resolvConf(spec.Network)}
+	cfg := childConfig{Spec: spec, Rootfs: dir, RootfsSize: RootfsSize, ResolvConf: resolvConf(spec.Network)}
 
 	var parentEnds, childEnds []*os.File
 	pipe := func(childReads bool) (*os.File, error) {

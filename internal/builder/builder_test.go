@@ -116,6 +116,7 @@ ARG NAME=default
 ENV APP_HOME=/srv/app GREETING="hello world"
 WORKDIR $APP_HOME
 COPY main.txt ./
+COPY "with space.txt" ./
 COPY src/ lib/
 COPY *.md docs/
 COPY --chown=1000:1001 --chmod=0700 main.txt /owned
@@ -129,12 +130,13 @@ VOLUME /data
 ENTRYPOINT ["/app"]
 CMD serve --port 8080
 `,
-		".dockerignore": "secret.md\nsrc/tmp\n",
-		"main.txt":      "main",
-		"src/a/b.txt":   "b",
-		"src/tmp/x":     "ignored",
-		"README.md":     "readme",
-		"secret.md":     "secret",
+		".dockerignore":  "secret.md\nsrc/tmp\n",
+		"main.txt":       "main",
+		"with space.txt": "spaced",
+		"src/a/b.txt":    "b",
+		"src/tmp/x":      "ignored",
+		"README.md":      "readme",
+		"secret.md":      "secret",
 	})
 	ref, _ := store.ParseLocal("app:test")
 	img := e.mustBuild(Options{Tags: []name.Reference{ref}, BuildArgs: map[string]string{"NAME": "aic"}})
@@ -142,6 +144,7 @@ CMD serve --port 8080
 	got := flatten(t, img)
 	for p, want := range map[string]file{
 		"srv/app/main.txt":       {typ: tar.TypeReg, body: "main", mode: 0o644},
+		"srv/app/with space.txt": {typ: tar.TypeReg, body: "spaced", mode: 0o644},
 		"srv/app/lib/a/b.txt":    {typ: tar.TypeReg, body: "b", mode: 0o644},
 		"srv/app/docs/README.md": {typ: tar.TypeReg, body: "readme", mode: 0o644},
 		"owned":                  {typ: tar.TypeReg, body: "main", mode: 0o700, uid: 1000, gid: 1001},
