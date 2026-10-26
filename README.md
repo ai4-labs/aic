@@ -203,7 +203,8 @@ On macOS, `make` cross-compiles the Linux guest (`cmd/aic-guest`), embeds it,
 and signs `aic` with the `com.apple.security.virtualization` entitlement
 (ad hoc). A plain `go build` from a checkout works for everything except
 `RUN` and `aic run`; use `make` for those. Requires Go 1.26+ and, on macOS,
-the Xcode command line tools (cgo); tested on macOS 15.
+the Xcode command line tools (cgo); tested on macOS 15. Make sure you have an
+up-to-date Command Line Tools installed (`xcode-select --install`).
 
 | Variable | |
 |---|---|
